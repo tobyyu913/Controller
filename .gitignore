@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+xcuserdata/
+
+# Xcode build
+build/
+DerivedData/
+
+# Android build artifacts
+Controller-Android/.gradle/
+Controller-Android/app/build/
+Controller-Android/build/
+Controller-Android/local.properties
+
+# Gradle
+.gradle/
+*.apk
+
+# IDE
+.idea/
+*.iml

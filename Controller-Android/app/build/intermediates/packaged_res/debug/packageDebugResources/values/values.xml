@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Controller</string>
-    <style name="Theme.Controller" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowFullscreen">true</item>
-        <item name="android:navigationBarColor">#FF000000</item>
-        <item name="android:statusBarColor">#FF000000</item>
-    </style>
-</resources>
