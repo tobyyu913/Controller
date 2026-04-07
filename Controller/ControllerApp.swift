@@ -13,6 +13,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         return .landscape
     }
 }
+
+struct iOSRootView: View {
+    var body: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            iPadReceiverView()
+        } else {
+            ContentView()
+        }
+    }
+}
 #endif
 
 @main
@@ -26,8 +36,8 @@ struct ControllerApp: App {
             #if os(macOS)
             MacContentView()
                 .preferredColorScheme(.dark)
-            #else
-            ContentView()
+            #elseif os(iOS)
+            iOSRootView()
                 .preferredColorScheme(.dark)
             #endif
         }

@@ -2,29 +2,46 @@
 //  ReceiverView.swift
 //  Controller
 //
-//  macOS receiver: shows live controller input from the connected iPhone.
+//  macOS receiver: shows live controller input from connected phones.
 //
 
 #if os(macOS)
 import SwiftUI
 
 struct ReceiverView: View {
-    @State private var receiver = ControllerReceiver()
+    let server: ControllerServer
 
     var body: some View {
         VStack(spacing: 20) {
             // Connection status
             HStack(spacing: 8) {
                 Circle()
-                    .fill(receiver.connectedPeer != nil ? .green : (receiver.isSearching ? .orange : .gray))
+                    .fill(server.connectedPeer != nil ? .green : (server.isSearching ? .orange : .gray))
                     .frame(width: 10, height: 10)
                 Text(statusText)
                     .font(.system(.body, design: .monospaced))
             }
 
+            // Connected clients list
+            if !server.connectedClients.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(server.connectedClients) { client in
+                        HStack(spacing: 4) {
+                            Circle().fill(.green).frame(width: 6, height: 6)
+                            Text(client.name)
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+                }
+            }
+
             Divider()
 
-            if let msg = receiver.latestMessage {
+            if let msg = server.latestMessage {
                 HStack(alignment: .top, spacing: 40) {
                     // Left side
                     VStack(alignment: .leading, spacing: 12) {
@@ -51,22 +68,20 @@ struct ReceiverView: View {
                 ContentUnavailableView(
                     "Waiting for Controller",
                     systemImage: "gamecontroller",
-                    description: Text("Open the Controller app on your iPhone.\nMake sure both devices are on the same network.")
+                    description: Text("Open the Controller app on your phone.\nServer running on port 9876.")
                 )
             }
         }
         .padding()
         .frame(minWidth: 600, minHeight: 400)
-        .onAppear { receiver.start() }
-        .onDisappear { receiver.stop() }
     }
 
     private var statusText: String {
-        if let peer = receiver.connectedPeer {
-            let method = receiver.connectionMethod ?? "Unknown"
-            return "Connected via \(method): \(peer)"
-        } else if receiver.isSearching {
-            return "Searching for USB controller..."
+        if let peer = server.connectedPeer {
+            return "Connected: \(peer)"
+        } else if server.isSearching {
+            let ip = server.getLocalIP()
+            return "Server running (\(ip):9876) — waiting for controllers..."
         } else {
             return "Offline"
         }
@@ -215,7 +230,7 @@ struct FlowLayout: Layout {
 // MARK: - Universal Mode View
 
 struct UniversalView: View {
-    @State private var receiver = ControllerReceiver()
+    let server: ControllerServer
     @State private var mapper = InputMapper()
     @State private var sensitivity: Double = 15.0
     @State private var rebindingId: String? = nil
@@ -228,9 +243,9 @@ struct UniversalView: View {
                 // Connection status
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(receiver.connectedPeer != nil ? .green : (receiver.isSearching ? .orange : .gray))
+                        .fill(server.connectedPeer != nil ? .green : (server.isSearching ? .orange : .gray))
                         .frame(width: 10, height: 10)
-                    Text(receiver.connectedPeer != nil ? "Connected via USB" : "Searching for USB controller...")
+                    Text(server.connectedPeer != nil ? "Connected: \(server.connectedPeer!)" : "Server running — waiting for controllers...")
                         .font(.system(.body, design: .monospaced))
                 }
 
@@ -353,7 +368,7 @@ struct UniversalView: View {
                     Text("")
                         .frame(width: 60)
                     Spacer()
-                    if let msg = receiver.latestMessage, abs(msg.rightStickX) > 0.1 || abs(msg.rightStickY) > 0.1 {
+                    if let msg = server.latestMessage, abs(msg.rightStickX) > 0.1 || abs(msg.rightStickY) > 0.1 {
                         Circle().fill(.green).frame(width: 8, height: 8)
                     }
                 }
@@ -383,7 +398,7 @@ struct UniversalView: View {
                                 .buttonStyle(.plain)
 
                                 // Active indicator
-                                let active = isEntryActive(entry, msg: receiver.latestMessage)
+                                let active = isEntryActive(entry, msg: server.latestMessage)
                                 Circle()
                                     .fill(active ? .green : .clear)
                                     .frame(width: 8, height: 8)
@@ -431,13 +446,11 @@ struct UniversalView: View {
         }
         .frame(minWidth: 500, minHeight: 550)
         .onAppear {
-            receiver.start()
             sensitivity = mapper.mapping.mouseSensitivity
         }
         .onDisappear {
             keyListener.stop()
             mapper.releaseAll()
-            receiver.stop()
         }
         .onChange(of: keyListener.capturedKeyCode) {
             guard let keyCode = keyListener.capturedKeyCode,
@@ -449,11 +462,11 @@ struct UniversalView: View {
             rebindingId = nil
             activePreset = "Custom"
         }
-        .onChange(of: receiver.latestMessage?.pressedButtons) { mapper.process(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.leftStickX) { mapper.process(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.leftStickY) { mapper.process(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.rightStickX) { mapper.process(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.rightStickY) { mapper.process(receiver.latestMessage) }
+        .onChange(of: server.latestMessage?.pressedButtons) { mapper.process(server.latestMessage) }
+        .onChange(of: server.latestMessage?.leftStickX) { mapper.process(server.latestMessage) }
+        .onChange(of: server.latestMessage?.leftStickY) { mapper.process(server.latestMessage) }
+        .onChange(of: server.latestMessage?.rightStickX) { mapper.process(server.latestMessage) }
+        .onChange(of: server.latestMessage?.rightStickY) { mapper.process(server.latestMessage) }
     }
 
     private func isEntryActive(_ entry: MappingEntry, msg: ControllerMessage?) -> Bool {
@@ -490,21 +503,27 @@ struct UniversalView: View {
 // MARK: - Mac Content View (tab switcher)
 
 struct MacContentView: View {
+    @State private var server = ControllerServer()
     @State private var selectedTab = "universal"
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            UniversalView()
+            UniversalView(server: server)
                 .tabItem { Label("Universal", systemImage: "keyboard") }
                 .tag("universal")
-            GameView()
+            GameView(server: server)
                 .tabItem { Label("Parkour", systemImage: "gamecontroller") }
                 .tag("game")
-            ReceiverView()
+            DualGameView(server: server)
+                .tabItem { Label("Co-op", systemImage: "person.2") }
+                .tag("coop")
+            ReceiverView(server: server)
                 .tabItem { Label("Debug", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag("debug")
         }
         .frame(minWidth: 800, minHeight: 600)
+        .onAppear { server.start() }
+        .onDisappear { server.stop() }
     }
 }
 #endif

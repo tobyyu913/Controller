@@ -2,7 +2,7 @@
 //  NetworkService.swift
 //  Controller
 //
-//  USB-only networking: Android sends over TCP, macOS connects via ADB port forwarding.
+//  Server-client networking: macOS/iPad runs a TCP server, phones connect as clients.
 //
 
 import Foundation
@@ -11,95 +11,189 @@ import SwiftUI
 
 private let fixedPort: UInt16 = 9876
 
-// MARK: - Controller Sender (iOS)
+// MARK: - Controller Server (macOS & iPad — accepts multiple phone clients)
 
-#if os(iOS)
 @Observable
-class ControllerSender {
-    var isAdvertising = false
-    var connectedPeer: String?
+class ControllerServer {
+    var isRunning = false
+    var connectedClients: [ClientInfo] = []
+    var latestMessage: ControllerMessage?
 
     private var listener: NWListener?
-    private var connection: NWConnection?
+    private var connections: [String: NWConnection] = [:]
+
+    #if os(macOS)
+    private var usbTimer: DispatchSourceTimer?
+    #endif
+
+    struct ClientInfo: Identifiable {
+        let id: String
+        var name: String
+        var latestMessage: ControllerMessage?
+    }
+
+    var connectedPeer: String? {
+        if connectedClients.isEmpty { return nil }
+        if connectedClients.count == 1 { return connectedClients[0].name }
+        return "\(connectedClients.count) controllers"
+    }
+
+    var isSearching: Bool { isRunning }
+
+    /// Message from nth connected controller (0-indexed)
+    func message(forPlayer index: Int) -> ControllerMessage? {
+        guard index >= 0, index < connectedClients.count else { return nil }
+        return connectedClients[index].latestMessage
+    }
+
+    var player1Message: ControllerMessage? { message(forPlayer: 0) }
+    var player2Message: ControllerMessage? { message(forPlayer: 1) }
 
     func start() {
         guard listener == nil else { return }
         do {
             let params = NWParameters.tcp
-            let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: fixedPort)!)
+            let l = try NWListener(using: params, on: NWEndpoint.Port(rawValue: fixedPort)!)
+            l.service = NWListener.Service(name: "Controller", type: "_ps5ctrl._tcp")
 
-            listener.stateUpdateHandler = { [weak self] state in
+            l.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
-                    self?.isAdvertising = (state == .ready)
+                    self?.isRunning = (state == .ready)
                 }
             }
 
-            listener.newConnectionHandler = { [weak self] newConn in
-                self?.connection?.cancel()
-                self?.connection = newConn
-                newConn.start(queue: .main)
-                DispatchQueue.main.async {
-                    self?.connectedPeer = newConn.endpoint.debugDescription
-                }
-
-                self?.receiveLoop(on: newConn)
+            l.newConnectionHandler = { [weak self] conn in
+                self?.handleNewConnection(conn)
             }
 
-            listener.start(queue: .main)
-            self.listener = listener
+            l.start(queue: .main)
+            self.listener = l
+
+            #if os(macOS)
+            startUSBPolling()
+            #endif
         } catch {
-            print("Listener failed: \(error)")
+            print("Server start failed: \(error)")
         }
     }
 
     func stop() {
+        #if os(macOS)
+        usbTimer?.cancel()
+        usbTimer = nil
+        #endif
+        for (_, conn) in connections {
+            conn.cancel()
+        }
+        connections.removeAll()
+        connectedClients.removeAll()
         listener?.cancel()
         listener = nil
-        connection?.cancel()
-        connection = nil
-        isAdvertising = false
-        connectedPeer = nil
+        isRunning = false
+        latestMessage = nil
     }
 
-    func send(_ message: ControllerMessage) {
-        guard let conn = connection, conn.state == .ready,
-              let data = message.encoded() else { return }
+    // MARK: - Connection Handling
 
-        var length = UInt32(data.count).bigEndian
-        var frame = Data(bytes: &length, count: 4)
-        frame.append(data)
+    private func handleNewConnection(_ conn: NWConnection) {
+        let id = UUID().uuidString
 
-        conn.send(content: frame, completion: .contentProcessed { error in
-            if let error { print("Send error: \(error)") }
-        })
-    }
-
-    private func receiveLoop(on conn: NWConnection) {
         conn.stateUpdateHandler = { [weak self] state in
-            if case .failed = state {
-                DispatchQueue.main.async { self?.connectedPeer = nil }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    let name: String
+                    switch conn.endpoint {
+                    case .hostPort(let host, _):
+                        name = "\(host)"
+                    default:
+                        name = conn.endpoint.debugDescription
+                    }
+                    let client = ClientInfo(id: id, name: name)
+                    self.connectedClients.append(client)
+                    self.connections[id] = conn
+                    self.readFrame(from: conn, clientId: id)
+                case .failed, .cancelled:
+                    self.removeClient(id: id)
+                default: break
+                }
             }
-            if case .cancelled = state {
-                DispatchQueue.main.async { self?.connectedPeer = nil }
+        }
+
+        conn.start(queue: .main)
+    }
+
+    func removeClient(id: String) {
+        connections[id]?.cancel()
+        connections.removeValue(forKey: id)
+        connectedClients.removeAll { $0.id == id }
+        if connectedClients.isEmpty {
+            latestMessage = nil
+        }
+    }
+
+    // MARK: - Read Loop
+
+    private func readFrame(from conn: NWConnection, clientId: String) {
+        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
+            guard let data, data.count == 4 else {
+                if error == nil { self?.readFrame(from: conn, clientId: clientId) }
+                else { DispatchQueue.main.async { self?.removeClient(id: clientId) } }
+                return
+            }
+            let length = data.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            guard length > 0, length < 65536 else {
+                self?.readFrame(from: conn, clientId: clientId)
+                return
+            }
+
+            conn.receive(minimumIncompleteLength: Int(length), maximumLength: Int(length)) { [weak self] payload, _, _, error in
+                if let payload, let msg = ControllerMessage.decoded(from: payload) {
+                    DispatchQueue.main.async {
+                        if let idx = self?.connectedClients.firstIndex(where: { $0.id == clientId }) {
+                            self?.connectedClients[idx].latestMessage = msg
+                        }
+                        self?.latestMessage = msg
+                    }
+                }
+                if error == nil {
+                    self?.readFrame(from: conn, clientId: clientId)
+                } else {
+                    DispatchQueue.main.async { self?.removeClient(id: clientId) }
+                }
             }
         }
     }
-}
-#endif
 
-// MARK: - Controller Receiver (macOS) — USB only via ADB
+    // MARK: - Local IP
 
-#if os(macOS)
-@Observable
-class ControllerReceiver {
-    var isSearching = false
-    var connectedPeer: String?
-    var connectionMethod: String?
-    var latestMessage: ControllerMessage?
+    func getLocalIP() -> String {
+        var address = "?"
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return address }
+        defer { freeifaddrs(ifaddr) }
 
-    private var connection: NWConnection?
-    private var usbTimer: DispatchSourceTimer?
-    private var isConnecting = false
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            let addrFamily = interface.ifa_addr.pointee.sa_family
+            if addrFamily == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                if name == "en0" || name == "en1" {
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                                &hostname, socklen_t(hostname.count),
+                                nil, socklen_t(0), NI_NUMERICHOST)
+                    address = String(cString: hostname)
+                    break
+                }
+            }
+        }
+        return address
+    }
+
+    #if os(macOS)
+    // MARK: - USB (ADB) Reverse Forwarding
 
     private static let adbSearchPaths = [
         "/opt/homebrew/share/android-commandlinetools/platform-tools/adb",
@@ -109,58 +203,26 @@ class ControllerReceiver {
         "/Applications/Android Studio.app/Contents/plugins/android/resources/platform-tools/adb",
     ]
 
-    func start() {
-        isSearching = true
-        startUSBPolling()
-    }
-
-    func stop() {
-        usbTimer?.cancel()
-        usbTimer = nil
-        connection?.cancel()
-        connection = nil
-        isSearching = false
-        connectedPeer = nil
-        connectionMethod = nil
-        latestMessage = nil
-        isConnecting = false
-    }
-
-    // MARK: - USB (ADB) Polling
-
     private func startUSBPolling() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now(), repeating: 2.0)
         timer.setEventHandler { [weak self] in
-            self?.tryUSBConnection()
+            guard self != nil else { return }
+            Self.setupADBReverse()
         }
         timer.resume()
         usbTimer = timer
     }
 
-    private func tryUSBConnection() {
-        guard connection == nil, !isConnecting else { return }
-
-        guard let adb = Self.findADB() else { return }
-        guard let serial = Self.getUSBDeviceSerial(adb: adb) else { return }
-
-        // Set up port forwarding
-        Self.shell(adb, args: ["-s", serial, "forward", "tcp:\(fixedPort)", "tcp:\(fixedPort)"])
-
-        // Small delay to let adb forward stabilize
-        Thread.sleep(forTimeInterval: 0.5)
-
-        // Connect to forwarded port
-        DispatchQueue.main.async { [weak self] in
-            self?.connectToLocalhost(serial: serial)
-        }
+    private static func setupADBReverse() {
+        guard let adb = findADB() else { return }
+        guard let serial = getUSBDeviceSerial(adb: adb) else { return }
+        shell(adb, args: ["-s", serial, "reverse", "tcp:\(fixedPort)", "tcp:\(fixedPort)"])
     }
 
     private static func findADB() -> String? {
         for path in adbSearchPaths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
         return nil
     }
@@ -193,45 +255,118 @@ class ControllerReceiver {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard proc.terminationStatus == 0 else { return nil }
             return String(data: data, encoding: .utf8)
-        } catch {
-            return nil
-        }
+        } catch { return nil }
+    }
+    #endif
+}
+
+// MARK: - Controller Client (iPhone — connects to server and sends input)
+
+#if os(iOS)
+@Observable
+class ControllerClient {
+    var isConnected = false
+    var serverName: String?
+    var isSearching = false
+
+    private var connection: NWConnection?
+    private var browser: NWBrowser?
+
+    func start() {
+        guard browser == nil, connection == nil else { return }
+        isSearching = true
+        startBrowsing()
     }
 
-    // MARK: - Connection
+    func stop() {
+        browser?.cancel()
+        browser = nil
+        connection?.cancel()
+        connection = nil
+        isConnected = false
+        serverName = nil
+        isSearching = false
+    }
 
-    private func connectToLocalhost(serial: String) {
-        guard connection == nil, !isConnecting else { return }
-        isConnecting = true
+    func connectDirect(host: String, port: UInt16 = fixedPort) {
+        stop()
+        connect(host: host, port: port)
+    }
 
-        let host = NWEndpoint.Host("127.0.0.1")
-        let port = NWEndpoint.Port(rawValue: fixedPort)!
+    func send(_ message: ControllerMessage) {
+        guard let conn = connection, conn.state == .ready,
+              let data = message.encoded() else { return }
 
-        let conn = NWConnection(host: host, port: port, using: .tcp)
+        var length = UInt32(data.count).bigEndian
+        var frame = Data(bytes: &length, count: 4)
+        frame.append(data)
 
+        conn.send(content: frame, completion: .contentProcessed { error in
+            if let error { print("Send error: \(error)") }
+        })
+    }
+
+    // MARK: - Bonjour Discovery
+
+    private func startBrowsing() {
+        let b = NWBrowser(for: .bonjour(type: "_ps5ctrl._tcp", domain: nil), using: .tcp)
+
+        b.stateUpdateHandler = { [weak self] state in
+            DispatchQueue.main.async {
+                switch state {
+                case .ready:
+                    self?.isSearching = true
+                case .failed, .cancelled:
+                    self?.isSearching = false
+                default: break
+                }
+            }
+        }
+
+        b.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let self, self.connection == nil else { return }
+            if let result = results.first {
+                self.browser?.cancel()
+                self.browser = nil
+                self.connectToEndpoint(result.endpoint)
+            }
+        }
+
+        b.start(queue: .main)
+        self.browser = b
+    }
+
+    private func connectToEndpoint(_ endpoint: NWEndpoint) {
+        let conn = NWConnection(to: endpoint, using: .tcp)
+        setupConnection(conn, name: endpoint.debugDescription)
+    }
+
+    private func connect(host: String, port: UInt16) {
+        isSearching = true
+        let h = NWEndpoint.Host(host)
+        let p = NWEndpoint.Port(rawValue: port)!
+        let conn = NWConnection(host: h, port: p, using: .tcp)
+        setupConnection(conn, name: host)
+    }
+
+    private func setupConnection(_ conn: NWConnection, name: String) {
         conn.stateUpdateHandler = { [weak self] state in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch state {
                 case .ready:
-                    self.connectedPeer = serial
-                    self.connectionMethod = "USB"
-                    self.isConnecting = false
-                    self.readFrame(from: conn)
+                    self.isConnected = true
+                    self.serverName = name
+                    self.isSearching = false
                 case .waiting:
                     conn.cancel()
                     self.connection = nil
-                    self.isConnecting = false
-                case .failed:
                     self.handleDisconnect()
-                case .cancelled:
+                case .failed, .cancelled:
                     if self.connection === conn {
                         self.handleDisconnect()
-                    } else {
-                        self.isConnecting = false
                     }
-                default:
-                    break
+                default: break
                 }
             }
         }
@@ -241,41 +376,13 @@ class ControllerReceiver {
     }
 
     private func handleDisconnect() {
-        connectedPeer = nil
-        connectionMethod = nil
         connection?.cancel()
         connection = nil
-        isConnecting = false
-        latestMessage = nil
-    }
-
-    // MARK: - Read Loop
-
-    private func readFrame(from conn: NWConnection) {
-        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
-            guard let data, data.count == 4 else {
-                if error == nil { self?.readFrame(from: conn) }
-                else { DispatchQueue.main.async { self?.handleDisconnect() } }
-                return
-            }
-            let length = data.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-            guard length > 0, length < 65536 else {
-                self?.readFrame(from: conn)
-                return
-            }
-
-            conn.receive(minimumIncompleteLength: Int(length), maximumLength: Int(length)) { [weak self] payload, _, _, error in
-                if let payload, let msg = ControllerMessage.decoded(from: payload) {
-                    DispatchQueue.main.async {
-                        self?.latestMessage = msg
-                    }
-                }
-                if error == nil {
-                    self?.readFrame(from: conn)
-                } else {
-                    DispatchQueue.main.async { self?.handleDisconnect() }
-                }
-            }
+        isConnected = false
+        serverName = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, !self.isConnected, self.connection == nil else { return }
+            self.start()
         }
     }
 }

@@ -8,24 +8,26 @@ A dual-platform app that turns an Android (or iOS) phone into a PS5-style game c
 Controller/                     # iOS/macOS SwiftUI app (Xcode project)
   ControllerApp.swift           # Entry point, platform routing
   ContentView.swift             # iOS controller UI (PS5 layout)
-  NetworkService.swift          # iOS sender + macOS USB receiver (ADB)
+  NetworkService.swift          # ControllerServer (macOS/iPad) + ControllerClient (iPhone)
   ControllerMessage.swift       # Shared Codable message model
   GameView.swift                # macOS SceneKit 3D game
   ReceiverView.swift            # macOS debug view + tab switcher (MacContentView)
+  iPadReceiverView.swift        # iPad receiver (server + game + debug)
 Controller-Android/             # Android app (Kotlin + Jetpack Compose)
   app/src/main/java/com/toby/controller/
     MainActivity.kt             # Activity, Compose UI, edit mode
-    ControllerSender.kt         # TCP server on port 9876
+    ControllerSender.kt         # TCP client connecting to Mac/iPad server
     ControllerMessage.kt        # JSON message with length-prefixed framing
-    LayoutStore.kt              # SharedPreferences for custom layout positions
+    LayoutStore.kt              # SharedPreferences for custom layout + server host
 .github/workflows/build-apk.yml  # CI for Android APK
 ```
 
 ## Architecture
 
 - **Protocol**: TCP on fixed port 9876. Messages are 4-byte big-endian length prefix + JSON payload.
-- **Connection**: USB only. macOS receiver polls for ADB devices, runs `adb forward tcp:9876 tcp:9876`, connects to `localhost:9876`.
-- **No WiFi/Bonjour** — all networking is cable-based via ADB port forwarding.
+- **Server-Client Model**: macOS/iPad runs a TCP server on port 9876. Phones (iOS/Android) connect as clients. One server can accept multiple phone clients simultaneously.
+- **WiFi**: Server advertises via Bonjour (`_ps5ctrl._tcp`). Phones auto-discover or manually enter the server IP.
+- **USB (Android)**: macOS polls for ADB devices, runs `adb reverse tcp:9876 tcp:9876`. Android connects to `localhost:9876` which tunnels to the Mac's server.
 
 ### Data Model (ControllerMessage)
 ```json
@@ -86,9 +88,10 @@ ADB is installed at `/opt/homebrew/share/android-commandlinetools/platform-tools
 
 | Platform | Role | Key Feature |
 |----------|------|-------------|
-| iOS | Controller sender | PS5 layout, fixed landscape |
-| Android | Controller sender | PS5 layout + drag-to-customize edit mode |
-| macOS | Receiver | Three tabs: Universal (any game) + Parkour + Debug |
+| iOS (iPhone) | Controller client | PS5 layout, fixed landscape, auto-discovers server via Bonjour |
+| iOS (iPad) | Receiver server | Runs server on port 9876, shows parkour game + debug |
+| Android | Controller client | PS5 layout + edit mode, connects via WiFi (NSD/manual IP) or USB (ADB reverse) |
+| macOS | Receiver server | Runs server on port 9876, three tabs: Universal + Parkour + Debug, supports multiple clients |
 
 ### Universal Mode (any game)
 Emulates keyboard + mouse via CGEvent. Requires Accessibility permission.

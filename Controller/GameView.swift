@@ -11,7 +11,7 @@ import SwiftUI
 import SceneKit
 
 struct GameView: View {
-    @State private var receiver = ControllerReceiver()
+    let server: ControllerServer
     @State private var game = GameEngine()
 
     var body: some View {
@@ -35,9 +35,9 @@ struct GameView: View {
                 HStack(spacing: 12) {
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(receiver.connectedPeer != nil ? .green : (receiver.isSearching ? .orange : .gray))
+                            .fill(server.connectedPeer != nil ? .green : (server.isSearching ? .orange : .gray))
                             .frame(width: 8, height: 8)
-                        Text(receiver.connectedPeer != nil ? "Controller connected" : "Waiting for controller...")
+                        Text(server.connectedPeer != nil ? "Controller connected" : "Waiting for controller...")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.7))
                     }
@@ -90,19 +90,17 @@ struct GameView: View {
             }
         }
         .onAppear {
-            receiver.start()
             SoundManager.shared.playMusic()
         }
         .onDisappear {
-            receiver.stop()
             SoundManager.shared.stopMusic()
             SoundManager.shared.stopWalking()
         }
-        .onChange(of: receiver.latestMessage?.pressedButtons) { game.updateInput(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.leftStickX) { game.updateInput(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.leftStickY) { game.updateInput(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.rightStickX) { game.updateInput(receiver.latestMessage) }
-        .onChange(of: receiver.latestMessage?.rightStickY) { game.updateInput(receiver.latestMessage) }
+        .onChange(of: server.latestMessage?.pressedButtons) { game.updateInput(server.latestMessage) }
+        .onChange(of: server.latestMessage?.leftStickX) { game.updateInput(server.latestMessage) }
+        .onChange(of: server.latestMessage?.leftStickY) { game.updateInput(server.latestMessage) }
+        .onChange(of: server.latestMessage?.rightStickX) { game.updateInput(server.latestMessage) }
+        .onChange(of: server.latestMessage?.rightStickY) { game.updateInput(server.latestMessage) }
     }
 }
 

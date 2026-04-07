@@ -43,10 +43,15 @@ class MainActivity : ComponentActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        sender = ControllerSender()
-        sender?.start()
-
         val layoutStore = LayoutStore(this)
+        // Migrate old "bluetooth" mode to "wifi"
+        if (layoutStore.getConnectionMode() == "bluetooth") {
+            layoutStore.setConnectionMode("wifi")
+        }
+        sender = ControllerSender(this)
+        sender?.mode = layoutStore.getConnectionMode()
+        sender?.serverHost = layoutStore.getServerHost()
+        sender?.start()
 
         setContent {
             ControllerScreen(sender!!, layoutStore)
@@ -155,14 +160,24 @@ fun computeDefaults(screenW: Float, screenH: Float): DefaultPositions {
 fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
     val state = remember { ControllerState() }
     var isConnected by remember { mutableStateOf(false) }
-    var isListening by remember { mutableStateOf(false) }
+    var isConnecting by remember { mutableStateOf(false) }
+    var connectedName by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var connectionMode by remember { mutableStateOf(layoutStore.getConnectionMode()) }
+    var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
 
     LaunchedEffect(Unit) {
         sender.onStateChanged = {
             isConnected = sender.isConnected
-            isListening = sender.isListening
+            isConnecting = sender.isConnecting
+            connectedName = sender.connectedServerName
         }
+        // Wait for initial connection attempt
+        kotlinx.coroutines.delay(500)
+        isConnected = sender.isConnected
+        isConnecting = sender.isConnecting
+        connectedName = sender.connectedServerName
     }
 
     LaunchedEffect(
@@ -170,7 +185,7 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
         state.leftStick,
         state.rightStick
     ) {
-        if (!editing) sender.send(state.toMessage())
+        if (!editing && !showSettings) sender.send(state.toMessage())
     }
 
     val config = LocalConfiguration.current
@@ -199,82 +214,75 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
                     .clip(CircleShape)
                     .background(
                         if (isConnected) Color.Green
-                        else if (isListening) Color(0xFFFFA500)
+                        else if (isConnecting) Color(0xFFFFA500)
                         else Color.Gray
                     )
             )
             Text(
                 text = if (editing) "EDIT MODE — drag to reposition"
-                    else if (isConnected) "Connected"
-                    else if (isListening) "Waiting..."
+                    else if (isConnected) "Connected to ${connectedName}"
+                    else if (isConnecting) "Searching for server... (${connectionMode})"
                     else "Offline",
                 color = if (editing) Color(0xFF4488FF) else Color.Gray,
                 fontSize = 10.sp
             )
         }
 
-        // Edit / Settings button (top right)
+        // Settings button (top right)
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 4.dp, end = 8.dp)
                 .size(32.dp)
                 .clip(CircleShape)
-                .background(if (editing) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.08f))
+                .background(if (showSettings || editing) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.08f))
                 .pointerInput("settings") {
-                    detectTapGestures { editing = !editing }
+                    detectTapGestures { showSettings = !showSettings; if (showSettings) editing = false }
                 },
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                if (editing) "\u2713" else "\u2699",
-                color = if (editing) Color(0xFF4488FF) else Color.Gray,
-                fontSize = 16.sp
-            )
+            Text("\u2699", color = if (showSettings || editing) Color(0xFF4488FF) else Color.Gray, fontSize = 16.sp)
         }
 
-        // Reset button (only in edit mode, top right below gear)
+        // Done button when editing
         if (editing) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 40.dp, end = 4.dp)
+                    .padding(top = 4.dp, end = 48.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(Color.Red.copy(0.2f))
-                    .border(1.dp, Color.Red.copy(0.4f), RoundedCornerShape(6.dp))
-                    .pointerInput("reset") {
-                        detectTapGestures {
-                            layoutStore.clear()
-                            // Force recomposition by toggling edit
-                            editing = false
-                            editing = true
-                        }
+                    .background(Color(0xFF4488FF).copy(0.3f))
+                    .pointerInput("done") {
+                        detectTapGestures { editing = false }
                     }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Reset", color = Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("Done", color = Color(0xFF4488FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
 
+        // (Settings overlay moved to end of Box for correct Z-order)
+
         // All controls absolutely positioned
+        val inputDisabled = editing || showSettings
         DraggableElement("l2", layoutStore, editing, defaults.l2) {
-            TriggerButton("L2", state, editing)
+            TriggerButton("L2", state, inputDisabled)
         }
         DraggableElement("l1", layoutStore, editing, defaults.l1) {
-            BumperButton("L1", state, editing)
+            BumperButton("L1", state, inputDisabled)
         }
         DraggableElement("r1", layoutStore, editing, defaults.r1) {
-            BumperButton("R1", state, editing)
+            BumperButton("R1", state, inputDisabled)
         }
         DraggableElement("r2", layoutStore, editing, defaults.r2) {
-            TriggerButton("R2", state, editing)
+            TriggerButton("R2", state, inputDisabled)
         }
         DraggableElement("dpad", layoutStore, editing, defaults.dpad) {
-            DPad(state, editing)
+            DPad(state, inputDisabled)
         }
         DraggableElement("face", layoutStore, editing, defaults.faceButtons) {
-            FaceButtons(state, editing)
+            FaceButtons(state, inputDisabled)
         }
         DraggableElement("lstick", layoutStore, editing, defaults.leftStick) {
             AnalogStick(
@@ -283,7 +291,7 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
                     state.leftStick = offset
                     state.stickRadiusPx = radius
                 },
-                editing = editing,
+                editing = inputDisabled,
             )
         }
         DraggableElement("rstick", layoutStore, editing, defaults.rightStick) {
@@ -293,20 +301,47 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
                     state.rightStick = offset
                     state.stickRadiusPx = radius
                 },
-                editing = editing,
+                editing = inputDisabled,
             )
         }
         DraggableElement("create", layoutStore, editing, defaults.create) {
-            SmallPillButton("Create", state, editing)
+            SmallPillButton("Create", state, inputDisabled)
         }
         DraggableElement("touchpad", layoutStore, editing, defaults.touchpad) {
-            Touchpad(state, editing)
+            Touchpad(state, inputDisabled)
         }
         DraggableElement("options", layoutStore, editing, defaults.options) {
-            SmallPillButton("Options", state, editing)
+            SmallPillButton("Options", state, inputDisabled)
         }
         DraggableElement("ps", layoutStore, editing, defaults.ps) {
-            PSButton(state, editing)
+            PSButton(state, inputDisabled)
+        }
+
+        // Settings overlay (must be LAST so it draws on top of controls)
+        if (showSettings) {
+            SettingsOverlay(
+                connectionMode = connectionMode,
+                serverHost = serverHost,
+                onConnectionModeChange = { mode ->
+                    connectionMode = mode
+                    layoutStore.setConnectionMode(mode)
+                    sender.switchMode(mode)
+                },
+                onServerHostChange = { host ->
+                    serverHost = host
+                    layoutStore.setServerHost(host)
+                },
+                onConnect = {
+                    sender.connectDirect(serverHost)
+                    showSettings = false
+                },
+                onEditLayout = {
+                    showSettings = false
+                    editing = true
+                },
+                onResetLayout = { layoutStore.clear() },
+                onClose = { showSettings = false }
+            )
         }
     }
 }
@@ -600,5 +635,144 @@ fun PSButton(state: ControllerState, editing: Boolean = false) {
             )
     ) {
         Text("PS", color = if (pressed) Color.White else Color(0xFF4488FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// -- Settings Overlay --
+
+@Composable
+fun SettingsOverlay(
+    connectionMode: String,
+    serverHost: String,
+    onConnectionModeChange: (String) -> Unit,
+    onServerHostChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onEditLayout: () -> Unit,
+    onResetLayout: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.9f))
+            .pointerInput("settingsBg") { detectTapGestures { /* consume all touch */ } },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .width(300.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF1a1a1a))
+                .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Title + X close
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Settings", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(0.1f))
+                        .pointerInput("closeX") { detectTapGestures { onClose() } },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("\u2715", color = Color.White, fontSize = 14.sp)
+                }
+            }
+
+            // -- Connection Mode --
+            Text("Connection", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("wifi" to "WiFi", "cable" to "Cable (USB)").forEach { (mode, label) ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (connectionMode == mode) Color(0xFF4488FF).copy(0.25f) else Color.White.copy(0.06f))
+                            .border(1.dp, if (connectionMode == mode) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.1f), RoundedCornerShape(8.dp))
+                            .pointerInput(mode) { detectTapGestures { onConnectionModeChange(mode) } }
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(label, color = if (connectionMode == mode) Color(0xFF4488FF) else Color.Gray, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            if (connectionMode == "wifi") {
+                // Server IP entry for WiFi
+                Text("Mac/iPad Server IP", color = Color.Gray, fontSize = 10.sp)
+                var hostText by remember { mutableStateOf(serverHost) }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = hostText,
+                        onValueChange = { hostText = it; onServerHostChange(it) },
+                        placeholder = { Text("e.g. 192.168.1.100", fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        ),
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF4488FF),
+                            unfocusedBorderColor = Color.White.copy(0.2f),
+                            cursorColor = Color(0xFF4488FF),
+                        )
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF4488FF).copy(0.25f))
+                            .border(1.dp, Color(0xFF4488FF).copy(0.5f), RoundedCornerShape(8.dp))
+                            .pointerInput("connect") { detectTapGestures { onConnect() } }
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Text("Connect", color = Color(0xFF4488FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    "Leave empty to auto-discover via Bonjour",
+                    color = Color.Gray, fontSize = 9.sp
+                )
+            } else {
+                Text(
+                    "Connect USB cable and open Controller on Mac.\nADB reverse forwarding is automatic.",
+                    color = Color.Gray, fontSize = 10.sp
+                )
+            }
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
+
+            // -- Layout --
+            Text("Layout", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF4488FF).copy(0.15f))
+                        .border(1.dp, Color(0xFF4488FF).copy(0.4f), RoundedCornerShape(8.dp))
+                        .pointerInput("editLayout") { detectTapGestures { onEditLayout() } }
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text("Edit Layout", color = Color(0xFF4488FF), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Red.copy(0.15f))
+                        .border(1.dp, Color.Red.copy(0.4f), RoundedCornerShape(8.dp))
+                        .pointerInput("resetLayout") { detectTapGestures { onResetLayout() } }
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text("Reset Layout", color = Color.Red, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }

@@ -43,7 +43,7 @@ class ControllerState {
 struct ContentView: View {
     @State private var controller = ControllerState()
     #if os(iOS)
-    @State private var sender = ControllerSender()
+    @State private var client = ControllerClient()
     #endif
 
     var body: some View {
@@ -56,9 +56,9 @@ struct ContentView: View {
                 VStack {
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(sender.connectedPeer != nil ? .green : (sender.isAdvertising ? .orange : .gray))
+                            .fill(client.isConnected ? .green : (client.isSearching ? .orange : .gray))
                             .frame(width: 8, height: 8)
-                        Text(sender.connectedPeer != nil ? "Connected" : (sender.isAdvertising ? "Waiting..." : "Offline"))
+                        Text(client.isConnected ? "Connected" : (client.isSearching ? "Searching..." : "Offline"))
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.gray)
                     }
@@ -148,11 +148,11 @@ struct ContentView: View {
         #if os(iOS)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
-        .onAppear { sender.start() }
-        .onDisappear { sender.stop() }
-        .onChange(of: controller.pressedButtons) { sender.send(controller.toMessage()) }
-        .onChange(of: controller.leftStick) { sender.send(controller.toMessage()) }
-        .onChange(of: controller.rightStick) { sender.send(controller.toMessage()) }
+        .onAppear { client.start() }
+        .onDisappear { client.stop() }
+        .onChange(of: controller.pressedButtons) { client.send(controller.toMessage()) }
+        .onChange(of: controller.leftStick) { client.send(controller.toMessage()) }
+        .onChange(of: controller.rightStick) { client.send(controller.toMessage()) }
         #endif
     }
 }

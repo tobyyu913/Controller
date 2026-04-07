@@ -32,6 +32,39 @@ class LayoutStore(context: Context) {
     }
 
     fun clear() {
+        val mode = getConnectionMode() // preserve setting across reset
         prefs.edit().clear().apply()
+        setConnectionMode(mode)
+    }
+
+    fun setConnectionMode(mode: String) {
+        prefs.edit().putString("connection_mode", mode).apply()
+    }
+
+    fun getConnectionMode(): String {
+        return prefs.getString("connection_mode", "wifi") ?: "wifi"
+    }
+
+    fun setServerHost(host: String) {
+        prefs.edit().putString("server_host", host).apply()
+    }
+
+    fun getServerHost(): String {
+        return prefs.getString("server_host", "") ?: ""
+    }
+
+    fun getPairingCode(): String {
+        var code = prefs.getString("pairing_code", null)
+        if (code == null) {
+            code = (1000..9999).random().toString()
+            prefs.edit().putString("pairing_code", code).apply()
+        }
+        return code
+    }
+
+    fun regeneratePairingCode(): String {
+        val code = (1000..9999).random().toString()
+        prefs.edit().putString("pairing_code", code).apply()
+        return code
     }
 }

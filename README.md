@@ -1,25 +1,26 @@
 # Controller
 
-Turn your phone into a PS5-style game controller for your Mac — connected over USB.
+Turn your phone into a PS5-style game controller for your Mac — over USB or WiFi. Supports **multiple controllers** simultaneously.
 
-A cross-platform system with native apps for **Android** (Kotlin/Compose), **iOS** (SwiftUI), and **macOS** (SwiftUI/SceneKit). The phone acts as the controller, the Mac acts as the receiver, and everything runs over a wired USB connection via ADB port forwarding. No WiFi, no Bluetooth, no lag.
+A cross-platform system with native apps for **Android** (Kotlin/Compose), **iOS** (SwiftUI), and **macOS** (SwiftUI/SceneKit). The Mac runs a server, phones connect as clients, and controller input streams in real time. Includes a split-screen co-op platformer for two players.
 
 ## How It Works
 
 ```
-Phone (Android/iOS)          USB Cable            Mac (macOS)
-┌──────────────────┐                        ┌──────────────────────┐
-│  PS5 Controller  │──── TCP on port ────►  │  Receiver            │
-│  Touch UI        │      9876 via ADB      │  ├─ Universal Mode   │
-│                  │                        │  ├─ Parkour Game     │
-│  Sends button +  │                        │  └─ Debug View       │
-│  stick input as  │                        │                      │
-│  JSON frames     │                        │  Maps input to keys, │
-│                  │                        │  mouse, or 3D game   │
-└──────────────────┘                        └──────────────────────┘
+Phone 1 (Android/iOS)                    Mac (macOS) — Server
+┌──────────────────┐                    ┌──────────────────────┐
+│  PS5 Controller  │──── TCP 9876 ────► │  Receiver            │
+│  Touch UI        │  USB (ADB reverse) │  ├─ Universal Mode   │
+└──────────────────┘    or WiFi         │  ├─ Parkour Game     │
+                                        │  ├─ Co-op (2P Split) │
+Phone 2 (Android/iOS)                   │  └─ Debug View       │
+┌──────────────────┐                    │                      │
+│  PS5 Controller  │──── TCP 9876 ────► │  Maps input to keys, │
+│  Touch UI        │                    │  mouse, or 3D game   │
+└──────────────────┘                    └──────────────────────┘
 ```
 
-The phone runs a TCP server on port 9876. The Mac detects the phone via ADB, sets up port forwarding, and connects. Controller input is streamed as length-prefixed JSON frames in real time.
+The Mac runs a TCP server on port 9876 and advertises via Bonjour. Phones discover the server automatically (WiFi) or connect through ADB reverse port forwarding (USB). Multiple phones can connect simultaneously — each becomes a separate controller.
 
 ## Features
 
@@ -27,14 +28,15 @@ The phone runs a TCP server on port 9876. The Mac detects the phone via ADB, set
 - Full PS5 DualSense layout — D-Pad, face buttons, analog sticks, triggers, bumpers, and system buttons
 - Analog sticks with spring-back animation and click (L3/R3) support
 - Haptic feedback on stick press (iOS)
-- Connection status indicator
+- Auto-discovery of Mac server via Bonjour/mDNS
+- Manual server IP entry for WiFi, automatic localhost for USB
 - **Edit Mode** (Android only) — tap the gear icon to drag any button/stick to a custom position; layout persists across restarts
 
-### Mac Receiver — Three Modes
+### Mac Receiver — Four Modes
 
 **Universal Mode** — use your phone as a controller for *any* game or app:
 - Emulates keyboard + mouse input via macOS Accessibility APIs
-- Default mapping: left stick → WASD, right stick → mouse look, face buttons → Space/E/Q/F, triggers → Shift/Ctrl
+- Default mapping: left stick -> WASD, right stick -> mouse look, face buttons -> Space/E/Q/F, triggers -> Shift/Ctrl
 - 3 built-in presets (FPS, Racing, Platformer) + fully custom rebinding
 - Adjustable mouse sensitivity
 
@@ -45,16 +47,29 @@ The phone runs a TCP server on port 9876. The Mac detects the phone via ADB, set
 - Double-jump, coyote time, fall respawn
 - Procedurally generated soundtrack and sound effects
 
+**Co-op Mode** — split-screen dual-player platformer:
+- Two phones, two players, one screen split in half
+- Player 1 (orange) on left, Player 2 (cyan) on right
+- Each player has their own camera with right-stick orbit control
+- Movement is relative to camera facing direction
+- Shared checkpoints and course progression
+
 **Debug View** — live visualization of all controller input:
 - Real-time stick position display with crosshairs
 - Color-coded button state indicators
-- Connection status
+- Connected clients list showing all active controllers
+
+### iPad Receiver
+- Runs the same server as macOS — phones connect to iPad too
+- Parkour game + debug view tabs
+- Auto-advertises via Bonjour on the local network
 
 ## Requirements
 
 - **macOS** with Xcode installed
 - **Android phone** with USB debugging enabled, or **iOS device/simulator**
-- **ADB** installed (the app searches common install paths automatically)
+- **ADB** installed (the app searches common install paths automatically) — needed for USB only
+- For WiFi: Mac and phone on the same network
 
 ## Building
 
@@ -87,12 +102,33 @@ adb install -r Controller-Android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Usage
 
+### Single Controller (USB)
 1. **Connect** your Android phone to your Mac via USB
-2. **Enable USB debugging** on the phone (Settings → Developer Options → USB Debugging)
-3. **Launch the Controller app** on the phone — it starts a TCP server and shows "Waiting..."
-4. **Launch the Controller app** on the Mac — it auto-detects the phone, forwards the port, and connects
-5. **Choose a mode** on the Mac: Universal (keyboard/mouse emulation), Parkour (built-in game), or Debug
-6. For Universal Mode, grant **Accessibility permission** when prompted (System Settings → Privacy & Security → Accessibility)
+2. **Enable USB debugging** on the phone (Settings > Developer Options > USB Debugging)
+3. **Launch the Controller app** on the Mac — it auto-detects the phone and sets up ADB reverse forwarding
+4. **Launch the Controller app** on the phone — set to Cable mode in settings, it connects to localhost:9876
+5. **Choose a mode** on the Mac: Universal, Parkour, Co-op, or Debug
+
+### Single Controller (WiFi)
+1. **Launch the Controller app** on the Mac — server starts and advertises via Bonjour
+2. **Launch the Controller app** on the phone — set to WiFi mode, it auto-discovers the Mac
+3. Alternatively, enter the Mac's IP address manually in the phone's settings
+
+### Two Controllers (Co-op)
+1. Connect two phones (USB or WiFi)
+2. Open the **Co-op** tab on the Mac
+3. First phone connected = **P1** (orange, left screen), second = **P2** (cyan, right screen)
+4. Left stick to move, Circle to jump, L2 to sprint, right stick to rotate camera
+
+For Universal Mode, grant **Accessibility permission** when prompted (System Settings > Privacy & Security > Accessibility).
+
+## Architecture
+
+**Server-client model**: The Mac (or iPad) runs a TCP server on port 9876. Phones connect as clients.
+
+- **WiFi**: Server advertises via Bonjour (`_ps5ctrl._tcp`). Phones auto-discover or manually enter the server IP.
+- **USB (Android)**: Mac polls for ADB devices and runs `adb reverse tcp:9876 tcp:9876`. The phone connects to `localhost:9876` which tunnels back to the Mac's server.
+- **Multi-client**: The server accepts multiple simultaneous connections. Each connected phone is tracked independently with its own controller state.
 
 ## Protocol
 
@@ -120,19 +156,21 @@ Button names: `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, `Triangle`, `Circle
 Controller/                         # iOS/macOS SwiftUI app
   ControllerApp.swift               # Entry point, platform routing
   ContentView.swift                 # iOS controller UI (PS5 layout)
-  NetworkService.swift              # iOS TCP sender + macOS USB receiver
+  NetworkService.swift              # ControllerServer (macOS/iPad) + ControllerClient (iPhone)
   ControllerMessage.swift           # Shared Codable message model
   InputMapper.swift                 # macOS keyboard/mouse emulation
   ReceiverView.swift                # macOS UI with tab switcher
   GameView.swift                    # macOS 3D parkour game (SceneKit)
+  DualGameView.swift                # Split-screen co-op platformer (2 players)
+  iPadReceiverView.swift            # iPad receiver (server + game + debug)
   SoundManager.swift                # Procedural audio engine
 
 Controller-Android/                 # Android app (Kotlin + Compose)
   app/src/main/java/com/toby/controller/
     MainActivity.kt                 # Activity + Compose UI + edit mode
-    ControllerSender.kt             # TCP server on port 9876
+    ControllerSender.kt             # TCP client connecting to Mac/iPad server
     ControllerMessage.kt            # JSON message model
-    LayoutStore.kt                  # SharedPreferences for layout persistence
+    LayoutStore.kt                  # SharedPreferences for layout + server host
 ```
 
 ## Tech Stack
@@ -142,6 +180,7 @@ Controller-Android/                 # Android app (Kotlin + Compose)
 | iOS/macOS UI | SwiftUI |
 | 3D Game | SceneKit |
 | Networking | Network.framework (Apple), raw sockets (Android) |
+| Discovery | Bonjour / NSD (mDNS) |
 | Audio | AVAudioEngine (procedural synthesis) |
 | Android UI | Jetpack Compose + Material3 |
 | Build | Xcode / Gradle 8.11.1 |
