@@ -18,12 +18,18 @@ struct iPadReceiverView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            iPadGameView(server: server)
-                .tabItem { Label("Game", systemImage: "gamecontroller") }
+            iPadUniversalView(server: server)
+                .tabItem { Label("Universal", systemImage: "keyboard") }
                 .tag(0)
+            iPadGameView(server: server)
+                .tabItem { Label("Parkour", systemImage: "gamecontroller") }
+                .tag(1)
+            DualGameView(server: server)
+                .tabItem { Label("Co-op", systemImage: "person.2") }
+                .tag(2)
             iPadDebugView(server: server)
                 .tabItem { Label("Debug", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(1)
+                .tag(3)
         }
         .onAppear { server.start() }
         .onDisappear { server.stop() }
@@ -308,6 +314,165 @@ class iPadGameEngine {
     }
 }
 
+// MARK: - iPad Universal View
+
+struct iPadUniversalView: View {
+    let server: ControllerServer
+
+    // Default mapping table (matches Mac Universal defaults)
+    private let mappings: [(String, String)] = [
+        ("Left Stick Up", "W"),
+        ("Left Stick Down", "S"),
+        ("Left Stick Left", "A"),
+        ("Left Stick Right", "D"),
+        ("Right Stick", "Mouse"),
+        ("D-Pad Up", "Arrow Up"),
+        ("D-Pad Down", "Arrow Down"),
+        ("D-Pad Left", "Arrow Left"),
+        ("D-Pad Right", "Arrow Right"),
+        ("Cross", "Space"),
+        ("Circle", "E"),
+        ("Triangle", "Q"),
+        ("Square", "F"),
+        ("L1", "1"),
+        ("L2", "Shift"),
+        ("R1", "2"),
+        ("R2", "Ctrl"),
+        ("L3", "V"),
+        ("R3", "B"),
+        ("Options", "Escape"),
+        ("Create", "Tab"),
+        ("PS", "P"),
+        ("Touchpad", "M"),
+    ]
+
+    var body: some View {
+        VStack(spacing: 12) {
+            // Connection status
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(server.connectedPeer != nil ? .green : (server.isSearching ? .orange : .gray))
+                    .frame(width: 10, height: 10)
+                Text(server.connectedPeer != nil ? "Connected: \(server.connectedPeer!)" : "Server running — waiting for controllers...")
+                    .font(.system(.body, design: .monospaced))
+            }
+
+            // Connected clients list
+            if !server.connectedClients.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(server.connectedClients) { client in
+                        HStack(spacing: 4) {
+                            Circle().fill(.green).frame(width: 6, height: 6)
+                            Text(client.name)
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+                }
+            }
+
+            Divider()
+
+            // Info banner
+            HStack {
+                Image(systemName: "keyboard")
+                    .foregroundStyle(.blue)
+                Text("Keyboard/Mouse Emulation")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                Spacer()
+                Text("macOS only")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.gray.opacity(0.15))
+                    .cornerRadius(4)
+            }
+
+            Divider()
+
+            // Mapping table header
+            HStack {
+                Text("Controller")
+                    .frame(width: 160, alignment: .leading)
+                Text("Mapped Key")
+                    .frame(width: 120, alignment: .leading)
+                Text("")
+                    .frame(width: 40)
+                Spacer()
+            }
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.gray.opacity(0.15))
+
+            // Mapping rows with live activity indicators
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(mappings.enumerated()), id: \.offset) { i, mapping in
+                        HStack {
+                            Text(mapping.0)
+                                .font(.system(size: 13, design: .monospaced))
+                                .frame(width: 160, alignment: .leading)
+
+                            Text(mapping.1)
+                                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.blue)
+                                .frame(width: 120, alignment: .leading)
+
+                            // Live activity indicator
+                            Circle()
+                                .fill(isActive(mapping.0) ? .green : .clear)
+                                .frame(width: 8, height: 8)
+                                .frame(width: 40)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(i % 2 == 0 ? Color.clear : Color.gray.opacity(0.05))
+                    }
+                }
+            }
+        }
+        .padding()
+    }
+
+    private func isActive(_ label: String) -> Bool {
+        guard let msg = server.latestMessage else { return false }
+        let b = msg.pressedButtons
+        switch label {
+        case "Left Stick Up": return msg.leftStickY < -0.3
+        case "Left Stick Down": return msg.leftStickY > 0.3
+        case "Left Stick Left": return msg.leftStickX < -0.3
+        case "Left Stick Right": return msg.leftStickX > 0.3
+        case "Right Stick": return abs(msg.rightStickX) > 0.1 || abs(msg.rightStickY) > 0.1
+        case "D-Pad Up": return b.contains("DPadUp")
+        case "D-Pad Down": return b.contains("DPadDown")
+        case "D-Pad Left": return b.contains("DPadLeft")
+        case "D-Pad Right": return b.contains("DPadRight")
+        case "Cross": return b.contains("Cross")
+        case "Circle": return b.contains("Circle")
+        case "Triangle": return b.contains("Triangle")
+        case "Square": return b.contains("Square")
+        case "L1": return b.contains("L1")
+        case "L2": return b.contains("L2")
+        case "R1": return b.contains("R1")
+        case "R2": return b.contains("R2")
+        case "L3": return b.contains("L3")
+        case "R3": return b.contains("R3")
+        case "Options": return b.contains("Options")
+        case "Create": return b.contains("Create")
+        case "PS": return b.contains("PS")
+        case "Touchpad": return b.contains("Touchpad")
+        default: return false
+        }
+    }
+}
+
 // MARK: - iPad Debug View
 
 struct iPadDebugView: View {
@@ -374,8 +539,10 @@ struct iPadDebugView: View {
         } else if server.isSearching {
             let ip = server.getLocalIP()
             return "Server running (\(ip):9876)"
+        } else if let error = server.errorMessage {
+            return "Error: \(error)"
         } else {
-            return "Offline"
+            return "Starting server..."
         }
     }
 

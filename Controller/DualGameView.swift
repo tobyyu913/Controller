@@ -4,11 +4,21 @@
 //
 //  Split-screen dual-player co-op platformer. Each player gets their own camera view.
 //  Player 1 (orange) = left screen, Player 2 (cyan) = right screen.
+//  Works on both macOS and iPad.
 //
 
-#if os(macOS)
 import SwiftUI
 import SceneKit
+
+#if os(macOS)
+import AppKit
+private typealias PlatformColor = NSColor
+private typealias PlatformFont = NSFont
+#else
+import UIKit
+private typealias PlatformColor = UIColor
+private typealias PlatformFont = UIFont
+#endif
 
 struct DualGameView: View {
     let server: ControllerServer
@@ -169,6 +179,7 @@ struct DualGameView: View {
 
 // MARK: - Split Scene View (one SCNView per player)
 
+#if os(macOS)
 struct SplitSceneView: NSViewRepresentable {
     let scene: SCNScene
     let pointOfView: SCNNode
@@ -187,6 +198,26 @@ struct SplitSceneView: NSViewRepresentable {
         view.pointOfView = pointOfView
     }
 }
+#else
+struct SplitSceneView: UIViewRepresentable {
+    let scene: SCNScene
+    let pointOfView: SCNNode
+
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView()
+        view.scene = scene
+        view.pointOfView = pointOfView
+        view.backgroundColor = .black
+        view.antialiasingMode = .multisampling4X
+        view.isPlaying = true
+        return view
+    }
+
+    func updateUIView(_ view: SCNView, context: Context) {
+        view.pointOfView = pointOfView
+    }
+}
+#endif
 
 // MARK: - Player State
 
@@ -195,7 +226,7 @@ private class PlayerState {
     let bodyNode = SCNNode()
     let cameraNode = SCNNode()
     let cameraPivot = SCNNode()
-    let color: NSColor
+    let color: PlatformColor
     let label: String
 
     var velocityX: Float = 0
@@ -213,9 +244,9 @@ private class PlayerState {
     // Camera orbit (horizontal only, fixed elevation)
     var yaw: Float = 0
     let camDistance: Float = 12
-    let camHeight: Float = 5  // fixed height above player
+    let camHeight: Float = 5
 
-    init(color: NSColor, label: String, startPos: SCNVector3) {
+    init(color: PlatformColor, label: String, startPos: SCNVector3) {
         self.color = color
         self.label = label
 
@@ -232,7 +263,7 @@ private class PlayerState {
 
         // Label above head
         let text = SCNText(string: label, extrusionDepth: 0.05)
-        text.font = NSFont.systemFont(ofSize: 0.4, weight: .bold)
+        text.font = PlatformFont.systemFont(ofSize: 0.4, weight: .bold)
         text.flatness = 0.1
         let textMat = SCNMaterial()
         textMat.diffuse.contents = color
@@ -247,7 +278,6 @@ private class PlayerState {
         textNode.constraints = [billboard]
         node.addChildNode(textNode)
 
-        // Camera setup — follows this player from behind/above at an angle
         cameraNode.camera = SCNCamera()
         cameraNode.camera?.fieldOfView = 65
         cameraNode.camera?.zNear = 0.1
@@ -295,7 +325,6 @@ class DualGameEngine {
         scene.rootNode.addChildNode(p1.node)
         scene.rootNode.addChildNode(p2.node)
 
-        // Set up split-screen cameras (not attached to players — free-floating)
         p1CameraNode.camera = SCNCamera()
         p1CameraNode.camera?.fieldOfView = 65
         p1CameraNode.camera?.zNear = 0.1
@@ -319,29 +348,29 @@ class DualGameEngine {
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.color = NSColor(white: 0.4, alpha: 1)
+        ambient.light?.color = PlatformColor(white: 0.4, alpha: 1)
         scene.rootNode.addChildNode(ambient)
 
         let sun = SCNNode()
         sun.light = SCNLight()
         sun.light?.type = .directional
-        sun.light?.color = NSColor(white: 0.9, alpha: 1)
+        sun.light?.color = PlatformColor(white: 0.9, alpha: 1)
         sun.light?.castsShadow = true
         sun.light?.shadowMode = .deferred
         sun.light?.shadowSampleCount = 8
         sun.eulerAngles = SCNVector3(-Float.pi / 3, Float.pi / 4, 0)
         scene.rootNode.addChildNode(sun)
 
-        scene.background.contents = NSColor(red: 0.3, green: 0.5, blue: 0.85, alpha: 1)
+        scene.background.contents = PlatformColor(red: 0.3, green: 0.5, blue: 0.85, alpha: 1)
         scene.fogStartDistance = 50
         scene.fogEndDistance = 150
-        scene.fogColor = NSColor(red: 0.3, green: 0.5, blue: 0.85, alpha: 1)
+        scene.fogColor = PlatformColor(red: 0.3, green: 0.5, blue: 0.85, alpha: 1)
 
         let floor = SCNFloor()
         floor.reflectivity = 0.2
         let floorMat = SCNMaterial()
-        floorMat.diffuse.contents = NSColor(red: 0.1, green: 0.05, blue: 0.15, alpha: 1)
-        floorMat.emission.contents = NSColor(red: 0.2, green: 0.05, blue: 0.1, alpha: 1)
+        floorMat.diffuse.contents = PlatformColor(red: 0.1, green: 0.05, blue: 0.15, alpha: 1)
+        floorMat.emission.contents = PlatformColor(red: 0.2, green: 0.05, blue: 0.1, alpha: 1)
         floor.materials = [floorMat]
         let floorNode = SCNNode(geometry: floor)
         floorNode.position = SCNVector3(0, -12, 0)
@@ -349,46 +378,27 @@ class DualGameEngine {
     }
 
     private func buildCourse() {
-        let defs: [(Float, Float, Float, Float, Float, Float, Bool, NSColor)] = [
-            // Start platform
+        let defs: [(Float, Float, Float, Float, Float, Float, Bool, PlatformColor)] = [
             (0, 0, 0, 8, 0.5, 4, true, .systemGreen),
-
-            // Easy hops
             (8, 0.5, 0, 3, 0.3, 3, false, .darkGray),
             (14, 1.0, 0, 3, 0.3, 3, false, .darkGray),
             (20, 1.5, 0, 3, 0.3, 3, false, .darkGray),
-
-            // Checkpoint 2
             (27, 2.0, 0, 5, 0.4, 4, true, .systemBlue),
-
-            // Zigzag up
             (32, 2.8, -2, 2.5, 0.3, 2.5, false, .darkGray),
             (37, 3.6, 2, 2.5, 0.3, 2.5, false, .darkGray),
             (42, 4.4, -2, 2.5, 0.3, 2.5, false, .darkGray),
             (47, 5.2, 0, 2.5, 0.3, 2.5, false, .darkGray),
-
-            // Checkpoint 3
             (53, 5.5, 0, 5, 0.4, 4, true, .systemOrange),
-
-            // Long sprint jumps
             (61, 5.5, 0, 2, 0.3, 3, false, .darkGray),
             (70, 5.5, 0, 2, 0.3, 3, false, .darkGray),
             (79, 6.0, 0, 2, 0.3, 3, false, .darkGray),
-
-            // Checkpoint 4
             (86, 6.5, 0, 5, 0.4, 4, true, .systemPurple),
-
-            // Staircase
             (91, 7.2, 0, 2, 0.3, 3, false, .darkGray),
             (95, 8.0, 0, 2, 0.3, 3, false, .darkGray),
             (99, 8.8, 0, 2, 0.3, 3, false, .darkGray),
             (103, 9.6, 0, 2, 0.3, 3, false, .darkGray),
-
-            // Narrow beams
             (108, 10.0, 0, 6, 0.3, 0.8, false, .gray),
             (116, 10.0, 0, 6, 0.3, 0.8, false, .gray),
-
-            // Finish!
             (124, 10.0, 0, 8, 0.5, 5, true, .systemGreen),
         ]
 
@@ -413,8 +423,8 @@ class DualGameEngine {
 
                 let ring = SCNTorus(ringRadius: CGFloat(max(d.3, d.5)) * 0.5, pipeRadius: 0.05)
                 let ringMat = SCNMaterial()
-                ringMat.diffuse.contents = NSColor.yellow
-                ringMat.emission.contents = NSColor.yellow
+                ringMat.diffuse.contents = PlatformColor.systemYellow
+                ringMat.emission.contents = PlatformColor.systemYellow
                 ring.materials = [ringMat]
                 let ringNode = SCNNode(geometry: ring)
                 ringNode.position = SCNVector3(d.0, d.1 + d.4 / 2 + 0.6, d.2)
@@ -428,7 +438,7 @@ class DualGameEngine {
         for x in stride(from: Float(10), through: 120, by: 20) {
             let pillar = SCNCylinder(radius: 0.5, height: CGFloat(Float.random(in: 10...20)))
             let mat = SCNMaterial()
-            mat.diffuse.contents = NSColor(white: 0.2, alpha: 1)
+            mat.diffuse.contents = PlatformColor(white: 0.2, alpha: 1)
             pillar.materials = [mat]
             let node = SCNNode(geometry: pillar)
             let h = Float(pillar.height) / 2
@@ -473,15 +483,12 @@ class DualGameEngine {
     private func updatePlayerCamera(_ cam: SCNNode, player: PlayerState) {
         guard let msg = player.lastMessage else { return }
 
-        // Right stick X = rotate camera around player (limited range)
         let rx = Float(msg.rightStickX)
         if abs(rx) > 0.1 { player.yaw += rx * lookSpeed }
-        player.yaw = max(-Float.pi / 3, min(Float.pi / 3, player.yaw))  // ±60 degrees
+        player.yaw = max(-Float.pi / 3, min(Float.pi / 3, player.yaw))
 
-        // R3 (right stick click) resets camera behind player
         if msg.pressedButtons.contains("R3") { player.yaw = 0 }
 
-        // Compute orbit position: horizontal circle at fixed height
         let px = Float(player.node.position.x)
         let py = Float(player.node.position.y) + 1.0
         let pz = Float(player.node.position.z)
@@ -492,7 +499,6 @@ class DualGameEngine {
 
         let targetPos = SCNVector3(camX, camY, camZ)
 
-        // Smooth follow
         let cur = cam.position
         cam.position = SCNVector3(
             cur.x + (targetPos.x - cur.x) * 0.12,
@@ -500,7 +506,6 @@ class DualGameEngine {
             cur.z + (targetPos.z - cur.z) * 0.12
         )
 
-        // Always look at player
         cam.look(at: SCNVector3(px, py, pz))
     }
 
@@ -513,7 +518,6 @@ class DualGameEngine {
         player.isSprinting = buttons.contains("L2")
         let speed = player.isSprinting ? sprintSpeed : walkSpeed
 
-        // Movement relative to camera yaw
         let lx = Float(msg.leftStickX)
         let ly = Float(msg.leftStickY)
         if abs(lx) > 0.05 || abs(ly) > 0.05 {
@@ -547,14 +551,12 @@ class DualGameEngine {
 
         player.velocityY += gravity
 
-        var pos = player.node.position
-        pos.x += CGFloat(player.velocityX)
-        pos.z += CGFloat(player.velocityZ)
-        pos.y += CGFloat(player.velocityY)
+        var posX = Float(player.node.position.x) + player.velocityX
+        var posY = Float(player.node.position.y) + player.velocityY
+        var posZ = Float(player.node.position.z) + player.velocityZ
 
         let wasGrounded = player.isGrounded
         player.isGrounded = false
-        let feetY = Float(pos.y)
 
         for (i, plat) in platforms.enumerated() {
             let px = Float(plat.pos.x), py = Float(plat.pos.y), pz = Float(plat.pos.z)
@@ -563,11 +565,11 @@ class DualGameEngine {
             let hd = Float(plat.size.z) / 2 + playerRadius
             let platTop = py + hh
 
-            let onX = Float(pos.x) >= px - hw && Float(pos.x) <= px + hw
-            let onZ = Float(pos.z) >= pz - hd && Float(pos.z) <= pz + hd
+            let onX = posX >= px - hw && posX <= px + hw
+            let onZ = posZ >= pz - hd && posZ <= pz + hd
 
-            if onX && onZ && feetY <= platTop + 0.1 && feetY >= platTop - 0.5 && player.velocityY <= 0 {
-                pos.y = CGFloat(platTop)
+            if onX && onZ && posY <= platTop + 0.1 && posY >= platTop - 0.5 && player.velocityY <= 0 {
+                posY = platTop
                 player.velocityY = 0
                 player.isGrounded = true
                 player.canDoubleJump = true
@@ -596,12 +598,12 @@ class DualGameEngine {
             player.coyoteFrames -= 1
         }
 
-        if Float(pos.y) < -15 {
+        if posY < -15 {
             respawn(player)
             return
         }
 
-        player.node.position = pos
+        player.node.position = SCNVector3(posX, posY, posZ)
     }
 
     private func respawn(_ player: PlayerState) {
@@ -614,4 +616,3 @@ class DualGameEngine {
         player.coyoteFrames = 0
     }
 }
-#endif

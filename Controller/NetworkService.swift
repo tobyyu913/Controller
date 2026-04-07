@@ -18,6 +18,7 @@ class ControllerServer {
     var isRunning = false
     var connectedClients: [ClientInfo] = []
     var latestMessage: ControllerMessage?
+    var errorMessage: String?
 
     private var listener: NWListener?
     private var connections: [String: NWConnection] = [:]
@@ -51,14 +52,30 @@ class ControllerServer {
 
     func start() {
         guard listener == nil else { return }
+        errorMessage = nil
         do {
             let params = NWParameters.tcp
             let l = try NWListener(using: params, on: NWEndpoint.Port(rawValue: fixedPort)!)
+            #if os(macOS)
             l.service = NWListener.Service(name: "Controller", type: "_ps5ctrl._tcp")
+            #endif
 
             l.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
-                    self?.isRunning = (state == .ready)
+                    switch state {
+                    case .ready:
+                        self?.isRunning = true
+                        self?.errorMessage = nil
+                    case .failed(let error):
+                        self?.isRunning = false
+                        self?.errorMessage = "Listener failed: \(error)"
+                    case .waiting(let error):
+                        self?.errorMessage = "Waiting: \(error)"
+                    case .cancelled:
+                        self?.isRunning = false
+                    default:
+                        break
+                    }
                 }
             }
 
@@ -73,7 +90,7 @@ class ControllerServer {
             startUSBPolling()
             #endif
         } catch {
-            print("Server start failed: \(error)")
+            errorMessage = "Start failed: \(error)"
         }
     }
 
@@ -176,16 +193,21 @@ class ControllerServer {
 
         for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
             let interface = ptr.pointee
+            guard interface.ifa_addr != nil else { continue }
             let addrFamily = interface.ifa_addr.pointee.sa_family
             if addrFamily == UInt8(AF_INET) {
                 let name = String(cString: interface.ifa_name)
-                if name == "en0" || name == "en1" {
+                // en0 = WiFi on macOS/iPad, en1 = secondary, pdp_ip0 = cellular
+                if name == "en0" || name == "en1" || name == "en2" {
                     var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                     getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
                                 &hostname, socklen_t(hostname.count),
                                 nil, socklen_t(0), NI_NUMERICHOST)
-                    address = String(cString: hostname)
-                    break
+                    let ip = String(cString: hostname)
+                    if !ip.hasPrefix("127.") {
+                        address = ip
+                        break
+                    }
                 }
             }
         }
