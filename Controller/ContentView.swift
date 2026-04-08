@@ -204,7 +204,14 @@ struct DPadButton: View {
             )
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in controller.press("DPad\(label)") }
+                    .onChanged { _ in
+                        if !controller.isPressed("DPad\(label)") {
+                            #if os(iOS)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                        }
+                        controller.press("DPad\(label)")
+                    }
                     .onEnded { _ in controller.release("DPad\(label)") }
             )
     }
@@ -256,7 +263,14 @@ struct FaceButton: View {
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in controller.press(label) }
+                .onChanged { _ in
+                    if !controller.isPressed(label) {
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        #endif
+                    }
+                    controller.press(label)
+                }
                 .onEnded { _ in controller.release(label) }
         )
     }
@@ -269,6 +283,7 @@ struct AnalogStickView: View {
     let label: String
     let controller: ControllerState
     let radius: CGFloat = 40
+    @State private var wasAtEdge = false
 
     var body: some View {
         let pressed = controller.isPressed(label)
@@ -295,6 +310,7 @@ struct AnalogStickView: View {
                         .onChanged { value in
                             let translation = value.translation
                             let distance = sqrt(translation.width * translation.width + translation.height * translation.height)
+                            let atEdge = distance > radius * 0.95
                             if distance <= radius {
                                 stickOffset = translation
                             } else {
@@ -304,6 +320,12 @@ struct AnalogStickView: View {
                                     height: sin(angle) * radius
                                 )
                             }
+                            #if os(iOS)
+                            if atEdge && !wasAtEdge {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            }
+                            #endif
+                            wasAtEdge = atEdge
                         }
                         .onEnded { _ in
                             withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
@@ -347,7 +369,14 @@ struct TriggerButton: View {
             )
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in controller.press(label) }
+                    .onChanged { _ in
+                        if !controller.isPressed(label) {
+                            #if os(iOS)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                        }
+                        controller.press(label)
+                    }
                     .onEnded { _ in controller.release(label) }
             )
     }
@@ -373,7 +402,14 @@ struct BumperButton: View {
             )
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in controller.press(label) }
+                    .onChanged { _ in
+                        if !controller.isPressed(label) {
+                            #if os(iOS)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                        }
+                        controller.press(label)
+                    }
                     .onEnded { _ in controller.release(label) }
             )
     }
@@ -395,7 +431,14 @@ struct TouchpadView: View {
             .frame(width: 140, height: 50)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in controller.press("Touchpad") }
+                    .onChanged { _ in
+                        if !controller.isPressed("Touchpad") {
+                            #if os(iOS)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                        }
+                        controller.press("Touchpad")
+                    }
                     .onEnded { _ in controller.release("Touchpad") }
             )
     }
@@ -424,7 +467,14 @@ struct SmallPillButton: View {
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in controller.press(label) }
+                .onChanged { _ in
+                    if !controller.isPressed(label) {
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        #endif
+                    }
+                    controller.press(label)
+                }
                 .onEnded { _ in controller.release(label) }
         )
     }
@@ -450,7 +500,14 @@ struct PSButton: View {
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in controller.press("PS") }
+                .onChanged { _ in
+                    if !controller.isPressed("PS") {
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        #endif
+                    }
+                    controller.press("PS")
+                }
                 .onEnded { _ in controller.release("PS") }
         )
     }

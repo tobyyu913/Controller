@@ -1,6 +1,10 @@
 package com.toby.controller
 
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,7 +32,17 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.ui.platform.LocalView
 import kotlin.math.*
+
+// Haptic feedback helper
+fun vibrateLight(view: android.view.View) {
+    view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+}
+
+fun vibrateHeavy(view: android.view.View) {
+    view.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+}
 
 class MainActivity : ComponentActivity() {
     private var sender: ControllerSender? = null
@@ -376,6 +390,7 @@ fun DPad(state: ControllerState, editing: Boolean = false) {
 @Composable
 fun DPadBtn(symbol: String, name: String, state: ControllerState, editing: Boolean) {
     val pressed = !editing && state.isPressed(name)
+    val view = LocalView.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -387,6 +402,7 @@ fun DPadBtn(symbol: String, name: String, state: ControllerState, editing: Boole
                     detectTapGestures(
                         onPress = {
                             state.press(name)
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release(name)
                         }
@@ -422,6 +438,7 @@ fun FaceButtons(state: ControllerState, editing: Boolean = false) {
 @Composable
 fun FaceBtn(symbol: String, name: String, color: Color, state: ControllerState, editing: Boolean) {
     val pressed = !editing && state.isPressed(name)
+    val view = LocalView.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -434,6 +451,7 @@ fun FaceBtn(symbol: String, name: String, color: Color, state: ControllerState, 
                     detectTapGestures(
                         onPress = {
                             state.press(name)
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release(name)
                         }
@@ -457,6 +475,8 @@ fun AnalogStick(
     val baseSizeDp = 130.dp
     val thumbSizeDp = 56.dp
     val thumbVisualOffset = with(density) { ((baseSizeDp - thumbSizeDp) / 2).toPx() }
+    val view = LocalView.current
+    var wasAtEdge by remember { mutableStateOf(false) }
 
     Box(
         contentAlignment = Alignment.Center,
@@ -470,20 +490,27 @@ fun AnalogStick(
                     detectDragGestures(
                         onDragEnd = {
                             onOffsetChange(Offset.Zero, thumbVisualOffset)
+                            wasAtEdge = false
                         },
                         onDragCancel = {
                             onOffsetChange(Offset.Zero, thumbVisualOffset)
+                            wasAtEdge = false
                         }
                     ) { change, _ ->
                         change.consume()
                         val center = Offset(size.width / 2f, size.height / 2f)
                         val current = change.position - center
                         val dist = sqrt(current.x * current.x + current.y * current.y)
+                        val atEdge = dist > thumbVisualOffset * 0.95f
                         val clamped = if (dist <= thumbVisualOffset) current
                         else {
                             val angle = atan2(current.y, current.x)
                             Offset(cos(angle) * thumbVisualOffset, sin(angle) * thumbVisualOffset)
                         }
+                        if (atEdge && !wasAtEdge) {
+                            vibrateLight(view)
+                        }
+                        wasAtEdge = atEdge
                         onOffsetChange(clamped, thumbVisualOffset)
                     }
                 } else Modifier
@@ -505,6 +532,7 @@ fun AnalogStick(
 @Composable
 fun TriggerButton(label: String, state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
+    val view = LocalView.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -518,6 +546,7 @@ fun TriggerButton(label: String, state: ControllerState, editing: Boolean = fals
                     detectTapGestures(
                         onPress = {
                             state.press(label)
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release(label)
                         }
@@ -532,6 +561,7 @@ fun TriggerButton(label: String, state: ControllerState, editing: Boolean = fals
 @Composable
 fun BumperButton(label: String, state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
+    val view = LocalView.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -545,6 +575,7 @@ fun BumperButton(label: String, state: ControllerState, editing: Boolean = false
                     detectTapGestures(
                         onPress = {
                             state.press(label)
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release(label)
                         }
@@ -561,6 +592,7 @@ fun BumperButton(label: String, state: ControllerState, editing: Boolean = false
 @Composable
 fun Touchpad(state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed("Touchpad")
+    val view = LocalView.current
     Box(
         modifier = Modifier
             .width(130.dp)
@@ -573,6 +605,7 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
                     detectTapGestures(
                         onPress = {
                             state.press("Touchpad")
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release("Touchpad")
                         }
@@ -587,6 +620,7 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
 @Composable
 fun SmallPillButton(label: String, state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
+    val view = LocalView.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -599,6 +633,7 @@ fun SmallPillButton(label: String, state: ControllerState, editing: Boolean = fa
                     detectTapGestures(
                         onPress = {
                             state.press(label)
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release(label)
                         }
@@ -615,6 +650,7 @@ fun SmallPillButton(label: String, state: ControllerState, editing: Boolean = fa
 @Composable
 fun PSButton(state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed("PS")
+    val view = LocalView.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -627,6 +663,7 @@ fun PSButton(state: ControllerState, editing: Boolean = false) {
                     detectTapGestures(
                         onPress = {
                             state.press("PS")
+                            vibrateLight(view)
                             tryAwaitRelease()
                             state.release("PS")
                         }
