@@ -3,6 +3,7 @@
 ## Rules
 
 - **Auto-commit & push**: Whenever a major update is completed (new feature, new interface, significant refactor), automatically commit and push to `origin/main` without asking. Use a descriptive commit message summarizing the changes.
+- **Install before pushing**: Before committing and pushing, build and install the macOS app to `/Applications/Controller.app`, and install APKs on connected Android devices.
 
 A dual-platform app that turns an Android (or iOS) phone into a PS5-style game controller, connected to a macOS receiver via USB. Includes a 3D demo game on macOS.
 
