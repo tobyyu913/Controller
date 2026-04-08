@@ -46,6 +46,7 @@ fun vibrateHeavy(view: android.view.View) {
 
 class MainActivity : ComponentActivity() {
     private var sender: ControllerSender? = null
+    private var btController: BluetoothHidController? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,23 +58,37 @@ class MainActivity : ComponentActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val layoutStore = LayoutStore(this)
-        // Migrate old "bluetooth" mode to "wifi"
-        if (layoutStore.getConnectionMode() == "bluetooth") {
-            layoutStore.setConnectionMode("wifi")
+        // Request BT permissions on Android 12+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            requestPermissions(
+                arrayOf(
+                    android.Manifest.permission.BLUETOOTH_CONNECT,
+                    android.Manifest.permission.BLUETOOTH_ADVERTISE,
+                ), 1
+            )
         }
+
+        val layoutStore = LayoutStore(this)
         sender = ControllerSender(this)
-        sender?.mode = layoutStore.getConnectionMode()
-        sender?.serverHost = layoutStore.getServerHost()
-        sender?.start()
+        btController = BluetoothHidController(this)
+
+        val mode = layoutStore.getConnectionMode()
+        if (mode == "bluetooth") {
+            btController?.start()
+        } else {
+            sender?.mode = mode
+            sender?.serverHost = layoutStore.getServerHost()
+            sender?.start()
+        }
 
         setContent {
-            ControllerScreen(sender!!, layoutStore)
+            ControllerScreen(sender!!, btController!!, layoutStore, this)
         }
     }
 
     override fun onDestroy() {
         sender?.stop()
+        btController?.stop()
         super.onDestroy()
     }
 }
@@ -171,7 +186,7 @@ fun computeDefaults(screenW: Float, screenH: Float): DefaultPositions {
 // -- Main Screen --
 
 @Composable
-fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
+fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidController, layoutStore: LayoutStore, activity: ComponentActivity) {
     val state = remember { ControllerState() }
     var isConnected by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
@@ -181,17 +196,30 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
     var connectionMode by remember { mutableStateOf(layoutStore.getConnectionMode()) }
     var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
 
-    LaunchedEffect(Unit) {
-        sender.onStateChanged = {
+    // Sync state from whichever controller is active
+    fun syncState() {
+        if (connectionMode == "bluetooth") {
+            isConnected = btController.isConnected
+            isConnecting = btController.isRegistered && !btController.isConnected
+            connectedName = btController.connectedDeviceName
+        } else {
             isConnected = sender.isConnected
             isConnecting = sender.isConnecting
             connectedName = sender.connectedServerName
         }
-        // Wait for initial connection attempt
+    }
+
+    LaunchedEffect(Unit) {
+        sender.onStateChanged = { syncState() }
+        btController.onStateChanged = { syncState() }
         kotlinx.coroutines.delay(500)
-        isConnected = sender.isConnected
-        isConnecting = sender.isConnecting
-        connectedName = sender.connectedServerName
+        syncState()
+    }
+
+    LaunchedEffect(connectionMode) {
+        sender.onStateChanged = { syncState() }
+        btController.onStateChanged = { syncState() }
+        syncState()
     }
 
     LaunchedEffect(
@@ -199,7 +227,14 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
         state.leftStick,
         state.rightStick
     ) {
-        if (!editing && !showSettings) sender.send(state.toMessage())
+        if (!editing && !showSettings) {
+            val msg = state.toMessage()
+            if (connectionMode == "bluetooth") {
+                btController.send(msg)
+            } else {
+                sender.send(msg)
+            }
+        }
     }
 
     val config = LocalConfiguration.current
@@ -234,8 +269,10 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
             )
             Text(
                 text = if (editing) "EDIT MODE — drag to reposition"
-                    else if (isConnected) "Connected to ${connectedName}"
+                    else if (isConnected) "Connected to ${connectedName}" + if (connectionMode == "bluetooth") " (BT)" else ""
+                    else if (connectionMode == "bluetooth" && isConnecting) "Bluetooth gamepad active — pair from other device"
                     else if (isConnecting) "Searching for server... (${connectionMode})"
+                    else if (connectionMode == "bluetooth") "Bluetooth — registering..."
                     else "Offline",
                 color = if (editing) Color(0xFF4488FF) else Color.Gray,
                 fontSize = 10.sp
@@ -337,9 +374,27 @@ fun ControllerScreen(sender: ControllerSender, layoutStore: LayoutStore) {
                 connectionMode = connectionMode,
                 serverHost = serverHost,
                 onConnectionModeChange = { mode ->
+                    // Stop current mode
+                    if (connectionMode == "bluetooth") {
+                        btController.stop()
+                    } else {
+                        sender.stop()
+                    }
                     connectionMode = mode
                     layoutStore.setConnectionMode(mode)
-                    sender.switchMode(mode)
+                    // Start new mode
+                    if (mode == "bluetooth") {
+                        btController.start()
+                        // Make device discoverable
+                        val intent = android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                        intent.putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+                        activity.startActivity(intent)
+                    } else {
+                        sender.mode = mode
+                        sender.serverHost = layoutStore.getServerHost()
+                        sender.start()
+                    }
+                    syncState()
                 },
                 onServerHostChange = { host ->
                     serverHost = host
@@ -723,7 +778,7 @@ fun SettingsOverlay(
             // -- Connection Mode --
             Text("Connection", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("wifi" to "WiFi", "cable" to "Cable (USB)").forEach { (mode, label) ->
+                listOf("wifi" to "WiFi", "cable" to "Cable (USB)", "bluetooth" to "Bluetooth").forEach { (mode, label) ->
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -776,6 +831,11 @@ fun SettingsOverlay(
                 Text(
                     "Leave empty to auto-discover via Bonjour",
                     color = Color.Gray, fontSize = 9.sp
+                )
+            } else if (connectionMode == "bluetooth") {
+                Text(
+                    "Phone registers as a Bluetooth gamepad.\nPair from your Mac/PC/console via Bluetooth settings.\nDevice will be discoverable for 5 minutes.",
+                    color = Color.Gray, fontSize = 10.sp
                 )
             } else {
                 Text(
