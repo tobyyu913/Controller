@@ -9,30 +9,177 @@
 import SwiftUI
 import SceneKit
 import Network
+import GameController
+
+// MARK: - Bluetooth Gamepad Receiver (uses GCController to detect BT HID gamepads)
+
+@Observable
+class BluetoothGamepadReceiver {
+    var connectedControllers: [String] = []
+    var latestMessage: ControllerMessage?
+    var isActive = false
+
+    private var pollTimer: DispatchSourceTimer?
+
+    func start() {
+        isActive = true
+        NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] note in
+            self?.updateControllerList()
+            if let gc = note.object as? GCController {
+                self?.bindController(gc)
+            }
+        }
+        NotificationCenter.default.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] _ in
+            self?.updateControllerList()
+        }
+        GCController.startWirelessControllerDiscovery {}
+        // Bind any already-connected controllers
+        for gc in GCController.controllers() {
+            bindController(gc)
+        }
+        updateControllerList()
+    }
+
+    func stop() {
+        isActive = false
+        GCController.stopWirelessControllerDiscovery()
+        NotificationCenter.default.removeObserver(self)
+        connectedControllers = []
+        latestMessage = nil
+    }
+
+    private func updateControllerList() {
+        connectedControllers = GCController.controllers().map { $0.vendorName ?? "Controller" }
+    }
+
+    private func bindController(_ gc: GCController) {
+        guard let gamepad = gc.extendedGamepad else { return }
+
+        gamepad.valueChangedHandler = { [weak self] pad, _ in
+            var buttons: [String] = []
+
+            if pad.buttonA.isPressed { buttons.append("Cross") }
+            if pad.buttonB.isPressed { buttons.append("Circle") }
+            if pad.buttonX.isPressed { buttons.append("Square") }
+            if pad.buttonY.isPressed { buttons.append("Triangle") }
+            if pad.leftShoulder.isPressed { buttons.append("L1") }
+            if pad.rightShoulder.isPressed { buttons.append("R1") }
+            if pad.leftTrigger.isPressed { buttons.append("L2") }
+            if pad.rightTrigger.isPressed { buttons.append("R2") }
+            if pad.dpad.up.isPressed { buttons.append("DPadUp") }
+            if pad.dpad.down.isPressed { buttons.append("DPadDown") }
+            if pad.dpad.left.isPressed { buttons.append("DPadLeft") }
+            if pad.dpad.right.isPressed { buttons.append("DPadRight") }
+            if pad.leftThumbstickButton?.isPressed == true { buttons.append("L3") }
+            if pad.rightThumbstickButton?.isPressed == true { buttons.append("R3") }
+            if pad.buttonOptions?.isPressed == true { buttons.append("Create") }
+            if pad.buttonMenu.isPressed { buttons.append("Options") }
+            if pad.buttonHome?.isPressed == true { buttons.append("PS") }
+
+            let msg = ControllerMessage(
+                pressedButtons: buttons,
+                leftStickX: Double(pad.leftThumbstick.xAxis.value),
+                leftStickY: Double(-pad.leftThumbstick.yAxis.value),
+                rightStickX: Double(pad.rightThumbstick.xAxis.value),
+                rightStickY: Double(-pad.rightThumbstick.yAxis.value)
+            )
+
+            DispatchQueue.main.async {
+                self?.latestMessage = msg
+            }
+        }
+    }
+}
 
 // MARK: - iPad Root View
 
 struct iPadReceiverView: View {
     @State private var server = ControllerServer()
+    @State private var btReceiver = BluetoothGamepadReceiver()
     @State private var selectedTab = 0
+    @State private var useWifi = true  // true = WiFi server, false = Bluetooth gamepad
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            iPadUniversalView(server: server)
-                .tabItem { Label("Universal", systemImage: "keyboard") }
-                .tag(0)
-            iPadGameView(server: server)
-                .tabItem { Label("Parkour", systemImage: "gamecontroller") }
-                .tag(1)
-            DualGameView(server: server)
-                .tabItem { Label("Co-op", systemImage: "person.2") }
-                .tag(2)
-            iPadDebugView(server: server)
-                .tabItem { Label("Debug", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(3)
+        VStack(spacing: 0) {
+            // WiFi / Bluetooth toggle
+            HStack(spacing: 12) {
+                Spacer()
+
+                Text("Input Source:")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: $useWifi) {
+                    Text("WiFi").tag(true)
+                    Text("Bluetooth").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+                .onChange(of: useWifi) {
+                    if useWifi {
+                        btReceiver.stop()
+                        server.start()
+                    } else {
+                        server.stop()
+                        btReceiver.start()
+                    }
+                }
+
+                if !useWifi {
+                    let count = btReceiver.connectedControllers.count
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(count > 0 ? .green : .orange)
+                            .frame(width: 8, height: 8)
+                        Text(count > 0 ? "\(count) gamepad\(count == 1 ? "" : "s")" : "Scanning...")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .background(Color(.systemBackground).opacity(0.95))
+
+            TabView(selection: $selectedTab) {
+                iPadUniversalView(server: server)
+                    .tabItem { Label("Universal", systemImage: "keyboard") }
+                    .tag(0)
+                iPadGameView(server: server)
+                    .tabItem { Label("Parkour", systemImage: "gamecontroller") }
+                    .tag(1)
+                DualGameView(server: server)
+                    .tabItem { Label("Co-op", systemImage: "person.2") }
+                    .tag(2)
+                iPadDebugView(server: server)
+                    .tabItem { Label("Debug", systemImage: "antenna.radiowaves.left.and.right") }
+                    .tag(3)
+            }
         }
-        .onAppear { server.start() }
-        .onDisappear { server.stop() }
+        .onAppear {
+            if useWifi { server.start() } else { btReceiver.start() }
+        }
+        .onDisappear {
+            server.stop()
+            btReceiver.stop()
+        }
+        // Feed BT gamepad input into the server's latestMessage so all tabs work
+        .onChange(of: btReceiver.latestMessage?.pressedButtons) {
+            if !useWifi { server.latestMessage = btReceiver.latestMessage }
+        }
+        .onChange(of: btReceiver.latestMessage?.leftStickX) {
+            if !useWifi { server.latestMessage = btReceiver.latestMessage }
+        }
+        .onChange(of: btReceiver.latestMessage?.leftStickY) {
+            if !useWifi { server.latestMessage = btReceiver.latestMessage }
+        }
+        .onChange(of: btReceiver.latestMessage?.rightStickX) {
+            if !useWifi { server.latestMessage = btReceiver.latestMessage }
+        }
+        .onChange(of: btReceiver.latestMessage?.rightStickY) {
+            if !useWifi { server.latestMessage = btReceiver.latestMessage }
+        }
     }
 }
 
