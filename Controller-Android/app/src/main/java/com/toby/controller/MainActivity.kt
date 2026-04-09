@@ -47,6 +47,7 @@ fun vibrateHeavy(view: android.view.View) {
 class MainActivity : ComponentActivity() {
     private var sender: ControllerSender? = null
     private var btController: BluetoothHidController? = null
+    private var blePeripheral: BleControllerPeripheral? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,10 +72,11 @@ class MainActivity : ComponentActivity() {
         val layoutStore = LayoutStore(this)
         sender = ControllerSender(this)
         btController = BluetoothHidController(this)
+        blePeripheral = BleControllerPeripheral(this)
 
         val mode = layoutStore.getConnectionMode()
         if (mode == "bluetooth") {
-            btController?.start()
+            blePeripheral?.start()
         } else {
             sender?.mode = mode
             sender?.serverHost = layoutStore.getServerHost()
@@ -82,13 +84,14 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            ControllerScreen(sender!!, btController!!, layoutStore, this)
+            ControllerScreen(sender!!, btController!!, blePeripheral!!, layoutStore, this)
         }
     }
 
     override fun onDestroy() {
         sender?.stop()
         btController?.stop()
+        blePeripheral?.stop()
         super.onDestroy()
     }
 }
@@ -186,7 +189,7 @@ fun computeDefaults(screenW: Float, screenH: Float): DefaultPositions {
 // -- Main Screen --
 
 @Composable
-fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidController, layoutStore: LayoutStore, activity: ComponentActivity) {
+fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidController, blePeripheral: BleControllerPeripheral, layoutStore: LayoutStore, activity: ComponentActivity) {
     val state = remember { ControllerState() }
     var isConnected by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
@@ -199,9 +202,9 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     // Sync state from whichever controller is active
     fun syncState() {
         if (connectionMode == "bluetooth") {
-            isConnected = btController.isConnected
-            isConnecting = btController.isRegistered && !btController.isConnected
-            connectedName = btController.connectedDeviceName
+            isConnected = blePeripheral.isConnected
+            isConnecting = blePeripheral.isAdvertising && !blePeripheral.isConnected
+            connectedName = blePeripheral.connectedDeviceName
         } else {
             isConnected = sender.isConnected
             isConnecting = sender.isConnecting
@@ -211,14 +214,14 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
 
     LaunchedEffect(Unit) {
         sender.onStateChanged = { syncState() }
-        btController.onStateChanged = { syncState() }
+        blePeripheral.onStateChanged = { syncState() }
         kotlinx.coroutines.delay(500)
         syncState()
     }
 
     LaunchedEffect(connectionMode) {
         sender.onStateChanged = { syncState() }
-        btController.onStateChanged = { syncState() }
+        blePeripheral.onStateChanged = { syncState() }
         syncState()
     }
 
@@ -230,7 +233,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         if (!editing && !showSettings) {
             val msg = state.toMessage()
             if (connectionMode == "bluetooth") {
-                btController.send(msg)
+                blePeripheral.send(msg)
             } else {
                 sender.send(msg)
             }
@@ -270,9 +273,8 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             Text(
                 text = if (editing) "EDIT MODE — drag to reposition"
                     else if (isConnected) "Connected to ${connectedName}" + if (connectionMode == "bluetooth") " (BT)" else ""
-                    else if (connectionMode == "bluetooth" && isConnecting) "Bluetooth gamepad active — pair from other device"
+                    else if (connectionMode == "bluetooth") blePeripheral.statusMessage.ifEmpty { "Bluetooth — starting..." }
                     else if (isConnecting) "Searching for server... (${connectionMode})"
-                    else if (connectionMode == "bluetooth") "Bluetooth — registering..."
                     else "Offline",
                 color = if (editing) Color(0xFF4488FF) else Color.Gray,
                 fontSize = 10.sp
@@ -376,7 +378,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 onConnectionModeChange = { mode ->
                     // Stop current mode
                     if (connectionMode == "bluetooth") {
-                        btController.stop()
+                        blePeripheral.stop()
                     } else {
                         sender.stop()
                     }
@@ -384,11 +386,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     layoutStore.setConnectionMode(mode)
                     // Start new mode
                     if (mode == "bluetooth") {
-                        btController.start()
-                        // Make device discoverable
-                        val intent = android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
-                        intent.putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
-                        activity.startActivity(intent)
+                        blePeripheral.start()
                     } else {
                         sender.mode = mode
                         sender.serverHost = layoutStore.getServerHost()

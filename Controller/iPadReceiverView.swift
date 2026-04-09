@@ -9,85 +9,127 @@
 import SwiftUI
 import SceneKit
 import Network
-import GameController
+import CoreBluetooth
 
-// MARK: - Bluetooth Gamepad Receiver (uses GCController to detect BT HID gamepads)
+// MARK: - BLE Controller Receiver (connects to Android phone's BLE GATT service)
+
+private let bleServiceUUID = CBUUID(string: "0000FE00-0000-1000-8000-00805F9B34FB")
+private let bleCharUUID = CBUUID(string: "0000FE01-0000-1000-8000-00805F9B34FB")
 
 @Observable
-class BluetoothGamepadReceiver {
+class BluetoothGamepadReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var connectedControllers: [String] = []
     var latestMessage: ControllerMessage?
     var isActive = false
+    var debugInfo = "init"
 
-    private var pollTimer: DispatchSourceTimer?
+    private var centralManager: CBCentralManager?
+    private var connectedPeripheral: CBPeripheral?
+
+    // Button bit positions (must match Android BleControllerPeripheral)
+    private let buttonNames: [Int: String] = [
+        0: "Cross", 1: "Circle", 2: "Square", 3: "Triangle",
+        4: "L1", 5: "R1", 6: "L2", 7: "R2",
+        8: "Create", 9: "Options", 10: "L3", 11: "R3",
+        12: "DPadUp", 13: "DPadDown", 14: "DPadLeft", 15: "DPadRight",
+    ]
 
     func start() {
         isActive = true
-        NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] note in
-            self?.updateControllerList()
-            if let gc = note.object as? GCController {
-                self?.bindController(gc)
-            }
-        }
-        NotificationCenter.default.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] _ in
-            self?.updateControllerList()
-        }
-        GCController.startWirelessControllerDiscovery {}
-        // Bind any already-connected controllers
-        for gc in GCController.controllers() {
-            bindController(gc)
-        }
-        updateControllerList()
+        debugInfo = "initializing BLE..."
+        centralManager = CBCentralManager(delegate: self, queue: .main)
     }
 
     func stop() {
         isActive = false
-        GCController.stopWirelessControllerDiscovery()
-        NotificationCenter.default.removeObserver(self)
+        if let p = connectedPeripheral { centralManager?.cancelPeripheralConnection(p) }
+        centralManager?.stopScan()
+        centralManager = nil
+        connectedPeripheral = nil
         connectedControllers = []
         latestMessage = nil
+        debugInfo = "stopped"
     }
 
-    private func updateControllerList() {
-        connectedControllers = GCController.controllers().map { $0.vendorName ?? "Controller" }
-    }
+    // MARK: - CBCentralManagerDelegate
 
-    private func bindController(_ gc: GCController) {
-        guard let gamepad = gc.extendedGamepad else { return }
-
-        gamepad.valueChangedHandler = { [weak self] pad, _ in
-            var buttons: [String] = []
-
-            if pad.buttonA.isPressed { buttons.append("Cross") }
-            if pad.buttonB.isPressed { buttons.append("Circle") }
-            if pad.buttonX.isPressed { buttons.append("Square") }
-            if pad.buttonY.isPressed { buttons.append("Triangle") }
-            if pad.leftShoulder.isPressed { buttons.append("L1") }
-            if pad.rightShoulder.isPressed { buttons.append("R1") }
-            if pad.leftTrigger.isPressed { buttons.append("L2") }
-            if pad.rightTrigger.isPressed { buttons.append("R2") }
-            if pad.dpad.up.isPressed { buttons.append("DPadUp") }
-            if pad.dpad.down.isPressed { buttons.append("DPadDown") }
-            if pad.dpad.left.isPressed { buttons.append("DPadLeft") }
-            if pad.dpad.right.isPressed { buttons.append("DPadRight") }
-            if pad.leftThumbstickButton?.isPressed == true { buttons.append("L3") }
-            if pad.rightThumbstickButton?.isPressed == true { buttons.append("R3") }
-            if pad.buttonOptions?.isPressed == true { buttons.append("Create") }
-            if pad.buttonMenu.isPressed { buttons.append("Options") }
-            if pad.buttonHome?.isPressed == true { buttons.append("PS") }
-
-            let msg = ControllerMessage(
-                pressedButtons: buttons,
-                leftStickX: Double(pad.leftThumbstick.xAxis.value),
-                leftStickY: Double(-pad.leftThumbstick.yAxis.value),
-                rightStickX: Double(pad.rightThumbstick.xAxis.value),
-                rightStickY: Double(-pad.rightThumbstick.yAxis.value)
-            )
-
-            DispatchQueue.main.async {
-                self?.latestMessage = msg
-            }
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if central.state == .poweredOn {
+            debugInfo = "scanning for Controller..."
+            central.scanForPeripherals(withServices: [bleServiceUUID], options: nil)
+        } else {
+            debugInfo = "BT state: \(central.state.rawValue)"
         }
+    }
+
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        debugInfo = "found: \(peripheral.name ?? peripheral.identifier.uuidString)"
+        central.stopScan()
+        connectedPeripheral = peripheral
+        peripheral.delegate = self
+        central.connect(peripheral, options: nil)
+    }
+
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        let name = peripheral.name ?? peripheral.identifier.uuidString
+        connectedControllers = [name]
+        debugInfo = "connected to \(name), discovering services..."
+        peripheral.discoverServices([bleServiceUUID])
+    }
+
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        connectedControllers = []
+        latestMessage = nil
+        debugInfo = "disconnected, rescanning..."
+        connectedPeripheral = nil
+        // Auto-reconnect
+        if isActive {
+            central.scanForPeripherals(withServices: [bleServiceUUID], options: nil)
+        }
+    }
+
+    // MARK: - CBPeripheralDelegate
+
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let service = peripheral.services?.first(where: { $0.uuid == bleServiceUUID }) else {
+            debugInfo = "service not found"
+            return
+        }
+        peripheral.discoverCharacteristics([bleCharUUID], for: service)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard let char = service.characteristics?.first(where: { $0.uuid == bleCharUUID }) else {
+            debugInfo = "characteristic not found"
+            return
+        }
+        peripheral.setNotifyValue(true, for: char)
+        debugInfo = "subscribed — receiving input"
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid == bleCharUUID, let data = characteristic.value, data.count >= 6 else { return }
+
+        // Parse 6-byte report: [buttons_lo][buttons_hi][lx][ly][rx][ry]
+        let buttonsLo = Int(data[0])
+        let buttonsHi = Int(data[1])
+        let buttons16 = buttonsLo | (buttonsHi << 8)
+
+        var pressed: [String] = []
+        for (bit, name) in buttonNames {
+            if buttons16 & (1 << bit) != 0 { pressed.append(name) }
+        }
+
+        let lx = Double(Int8(bitPattern: data[2])) / 127.0
+        let ly = Double(Int8(bitPattern: data[3])) / 127.0
+        let rx = Double(Int8(bitPattern: data[4])) / 127.0
+        let ry = Double(Int8(bitPattern: data[5])) / 127.0
+
+        latestMessage = ControllerMessage(
+            pressedButtons: pressed,
+            leftStickX: lx, leftStickY: ly,
+            rightStickX: rx, rightStickY: ry
+        )
     }
 }
 
@@ -131,9 +173,15 @@ struct iPadReceiverView: View {
                         Circle()
                             .fill(count > 0 ? .green : .orange)
                             .frame(width: 8, height: 8)
-                        Text(count > 0 ? "\(count) gamepad\(count == 1 ? "" : "s")" : "Scanning...")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                        if count > 0 {
+                            Text(btReceiver.connectedControllers.joined(separator: ", "))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Scanning... (\(btReceiver.debugInfo))")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
