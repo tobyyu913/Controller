@@ -53,6 +53,9 @@ class ControllerSender(private val context: Context) {
                 }
                 onStateChanged?.invoke()
 
+                // Send initial empty state so server has data immediately
+                send(ControllerMessage(emptyList(), 0.0, 0.0, 0.0, 0.0))
+
                 // Stay connected until socket is closed by send failure or stop()
                 while (scope.isActive && isConnected) {
                     delay(200)
