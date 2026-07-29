@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -74,6 +75,11 @@ class MainActivity : ComponentActivity() {
         }
 
         val layoutStore = LayoutStore(this)
+        // v2: DualSense-style default layout — reset old saved positions once
+        if (layoutStore.getLayoutVersion() < 2) {
+            layoutStore.clearLayout()
+            layoutStore.setLayoutVersion(2)
+        }
         sender = ControllerSender(this)
         btController = BluetoothHidController(this, layoutStore)
         blePeripheral = BleControllerPeripheral(this)
@@ -175,20 +181,35 @@ data class DefaultPositions(
     val ps: Offset,
 )
 
-fun computeDefaults(screenW: Float, screenH: Float): DefaultPositions {
+fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions {
+    // Element sizes in px (must match the composables' dp sizes), d = px per dp
+    val trigW = 60f * d; val trigH = 34f * d
+    val bumpW = 60f * d; val bumpH = 28f * d
+    val dpadS = 132f * d
+    val faceS = 138f * d
+    val stickS = 130f * d
+    val padW = 210f * d; val padH = 84f * d
+    val pillW = 44f * d
+    val psS = 34f * d
+    val m = 12f * d          // screen edge margin
+    val gap = 8f * d
+
+    // Real DualSense geometry, scaled to the screen: shoulders in the corners,
+    // D-Pad / face buttons outboard, symmetric sticks low and toward the center,
+    // big touchpad top-center with Create/Options flanking it, PS between the sticks.
     return DefaultPositions(
-        l2 = Offset(16f, 8f),
-        l1 = Offset(90f, 8f),
-        r1 = Offset(screenW - 160f, 8f),
-        r2 = Offset(screenW - 80f, 8f),
-        dpad = Offset(20f, screenH * 0.22f),
-        faceButtons = Offset(screenW - 190f, screenH * 0.15f),
-        leftStick = Offset(30f, screenH * 0.58f),
-        rightStick = Offset(screenW - 170f, screenH * 0.58f),
-        create = Offset(screenW * 0.35f, 10f),
-        touchpad = Offset(screenW * 0.5f - 65f, 10f),
-        options = Offset(screenW * 0.65f - 20f, 10f),
-        ps = Offset(screenW * 0.5f - 17f, screenH * 0.55f),
+        l2 = Offset(m, m),
+        l1 = Offset(m + trigW + gap, m + (trigH - bumpH) / 2),
+        r1 = Offset(screenW - m - trigW - gap - bumpW, m + (trigH - bumpH) / 2),
+        r2 = Offset(screenW - m - trigW, m),
+        dpad = Offset(max(m, 0.16f * screenW - dpadS / 2), 0.44f * screenH - dpadS / 2),
+        faceButtons = Offset(min(screenW - m - faceS, 0.84f * screenW - faceS / 2), 0.44f * screenH - faceS / 2),
+        leftStick = Offset(0.35f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
+        rightStick = Offset(0.65f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
+        create = Offset(screenW / 2 - padW / 2 - gap - pillW, 0.05f * screenH + 8f * d),
+        touchpad = Offset(screenW / 2 - padW / 2, 0.05f * screenH),
+        options = Offset(screenW / 2 + padW / 2 + gap, 0.05f * screenH + 8f * d),
+        ps = Offset(screenW / 2 - psS / 2, 0.66f * screenH - psS / 2),
     )
 }
 
@@ -204,6 +225,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     var showSettings by remember { mutableStateOf(false) }
     var connectionMode by remember { mutableStateOf(layoutStore.getConnectionMode()) }
     var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
+    var layoutTick by remember { mutableStateOf(0) }
 
     // Sync state from whichever controller is active
     fun syncState() {
@@ -260,7 +282,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     val density = LocalDensity.current
     val screenW = with(density) { config.screenWidthDp.dp.toPx() }
     val screenH = with(density) { config.screenHeightDp.dp.toPx() }
-    val defaults = remember(screenW, screenH) { computeDefaults(screenW, screenH) }
+    val defaults = remember(screenW, screenH, density) { computeDefaults(screenW, screenH, density.density) }
 
     Box(
         modifier = Modifier
@@ -298,10 +320,11 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             )
         }
 
-        // Settings button (top right)
+        // Settings button (top right) — zIndex keeps it tappable above R2
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
+                .zIndex(10f)
                 .padding(top = 4.dp, end = 8.dp)
                 .size(32.dp)
                 .clip(CircleShape)
@@ -319,6 +342,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .zIndex(10f)
                     .padding(top = 4.dp, end = 48.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .background(Color(0xFF4488FF).copy(0.3f))
@@ -334,8 +358,9 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
 
         // (Settings overlay moved to end of Box for correct Z-order)
 
-        // All controls absolutely positioned
+        // All controls absolutely positioned (key() forces re-read of saved positions on reset)
         val inputDisabled = editing || showSettings
+        key(layoutTick) {
         DraggableElement("l2", layoutStore, editing, defaults.l2) {
             TriggerButton("L2", state, inputDisabled)
         }
@@ -386,6 +411,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         DraggableElement("ps", layoutStore, editing, defaults.ps) {
             PSButton(state, inputDisabled)
         }
+        }
 
         // Settings overlay (must be LAST so it draws on top of controls)
         if (showSettings) {
@@ -425,7 +451,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     showSettings = false
                     editing = true
                 },
-                onResetLayout = { layoutStore.clear() },
+                onResetLayout = { layoutStore.clearLayout(); layoutTick++ },
                 onClose = { showSettings = false },
                 btController = btController,
                 onMakeDiscoverable = {
@@ -674,11 +700,11 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
     val view = LocalView.current
     Box(
         modifier = Modifier
-            .width(130.dp)
-            .height(46.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .width(210.dp)
+            .height(84.dp)
+            .clip(RoundedCornerShape(14.dp))
             .background(if (pressed) Color.White.copy(0.12f) else Color.White.copy(0.04f))
-            .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(10.dp))
+            .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(14.dp))
             .then(
                 if (!editing) Modifier.pointerInput("Touchpad") {
                     detectTapGestures(

@@ -37,6 +37,21 @@ class LayoutStore(context: Context) {
         setConnectionMode(mode)
     }
 
+    /** Remove only saved element positions/scales, keeping connection settings. */
+    fun clearLayout() {
+        val editor = prefs.edit()
+        prefs.all.keys
+            .filter { it.endsWith("_x") || it.endsWith("_y") || it.endsWith("_scale") }
+            .forEach { editor.remove(it) }
+        editor.apply()
+    }
+
+    fun getLayoutVersion(): Int = prefs.getInt("layout_version", 1)
+
+    fun setLayoutVersion(v: Int) {
+        prefs.edit().putInt("layout_version", v).apply()
+    }
+
     fun setConnectionMode(mode: String) {
         prefs.edit().putString("connection_mode", mode).apply()
     }
