@@ -206,9 +206,9 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
         faceButtons = Offset(min(screenW - m - faceS, 0.84f * screenW - faceS / 2), 0.44f * screenH - faceS / 2),
         leftStick = Offset(0.35f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
         rightStick = Offset(0.65f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
-        create = Offset(screenW / 2 - padW / 2 - gap - pillW, 0.05f * screenH + 8f * d),
-        touchpad = Offset(screenW / 2 - padW / 2, 0.05f * screenH),
-        options = Offset(screenW / 2 + padW / 2 + gap, 0.05f * screenH + 8f * d),
+        create = Offset(screenW / 2 - padW / 2 - gap - pillW, 0.14f * screenH + 8f * d),
+        touchpad = Offset(screenW / 2 - padW / 2, 0.14f * screenH),
+        options = Offset(screenW / 2 + padW / 2 + gap, 0.14f * screenH + 8f * d),
         ps = Offset(screenW / 2 - psS / 2, 0.66f * screenH - psS / 2),
     )
 }
@@ -320,12 +320,12 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             )
         }
 
-        // Settings button (top right) — zIndex keeps it tappable above R2
+        // Settings button (bottom right, out of the way of R2)
         Box(
             modifier = Modifier
-                .align(Alignment.TopEnd)
+                .align(Alignment.BottomEnd)
                 .zIndex(10f)
-                .padding(top = 4.dp, end = 8.dp)
+                .padding(bottom = 6.dp, end = 8.dp)
                 .size(32.dp)
                 .clip(CircleShape)
                 .background(if (showSettings || editing) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.08f))
@@ -341,9 +341,9 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         if (editing) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
+                    .align(Alignment.BottomEnd)
                     .zIndex(10f)
-                    .padding(top = 4.dp, end = 48.dp)
+                    .padding(bottom = 8.dp, end = 48.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .background(Color(0xFF4488FF).copy(0.3f))
                     .pointerInput("done") {
