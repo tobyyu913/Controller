@@ -53,6 +53,14 @@ class LayoutStore(context: Context) {
         return prefs.getString("server_host", "") ?: ""
     }
 
+    fun setLastBtHost(address: String) {
+        prefs.edit().putString("last_bt_host", address).apply()
+    }
+
+    fun getLastBtHost(): String {
+        return prefs.getString("last_bt_host", "") ?: ""
+    }
+
     fun getPairingCode(): String {
         var code = prefs.getString("pairing_code", null)
         if (code == null) {

@@ -1,5 +1,7 @@
 package com.toby.controller
 
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -11,6 +13,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -71,16 +75,18 @@ class MainActivity : ComponentActivity() {
 
         val layoutStore = LayoutStore(this)
         sender = ControllerSender(this)
-        btController = BluetoothHidController(this)
+        btController = BluetoothHidController(this, layoutStore)
         blePeripheral = BleControllerPeripheral(this)
 
         val mode = layoutStore.getConnectionMode()
-        if (mode == "bluetooth") {
-            blePeripheral?.start()
-        } else {
-            sender?.mode = mode
-            sender?.serverHost = layoutStore.getServerHost()
-            sender?.start()
+        when (mode) {
+            "bluetooth" -> blePeripheral?.start()
+            "gamepad" -> btController?.start()
+            else -> {
+                sender?.mode = mode
+                sender?.serverHost = layoutStore.getServerHost()
+                sender?.start()
+            }
         }
 
         setContent {
@@ -201,20 +207,29 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
 
     // Sync state from whichever controller is active
     fun syncState() {
-        if (connectionMode == "bluetooth") {
-            isConnected = blePeripheral.isConnected
-            isConnecting = blePeripheral.isAdvertising && !blePeripheral.isConnected
-            connectedName = blePeripheral.connectedDeviceName
-        } else {
-            isConnected = sender.isConnected
-            isConnecting = sender.isConnecting
-            connectedName = sender.connectedServerName
+        when (connectionMode) {
+            "bluetooth" -> {
+                isConnected = blePeripheral.isConnected
+                isConnecting = blePeripheral.isAdvertising && !blePeripheral.isConnected
+                connectedName = blePeripheral.connectedDeviceName
+            }
+            "gamepad" -> {
+                isConnected = btController.isConnected
+                isConnecting = btController.isRegistered && !btController.isConnected
+                connectedName = btController.connectedDeviceName
+            }
+            else -> {
+                isConnected = sender.isConnected
+                isConnecting = sender.isConnecting
+                connectedName = sender.connectedServerName
+            }
         }
     }
 
     LaunchedEffect(Unit) {
         sender.onStateChanged = { syncState() }
         blePeripheral.onStateChanged = { syncState() }
+        btController.onStateChanged = { syncState() }
         kotlinx.coroutines.delay(500)
         syncState()
     }
@@ -222,6 +237,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     LaunchedEffect(connectionMode) {
         sender.onStateChanged = { syncState() }
         blePeripheral.onStateChanged = { syncState() }
+        btController.onStateChanged = { syncState() }
         syncState()
     }
 
@@ -232,10 +248,10 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     ) {
         if (!editing && !showSettings) {
             val msg = state.toMessage()
-            if (connectionMode == "bluetooth") {
-                blePeripheral.send(msg)
-            } else {
-                sender.send(msg)
+            when (connectionMode) {
+                "bluetooth" -> blePeripheral.send(msg)
+                "gamepad" -> btController.send(msg)
+                else -> sender.send(msg)
             }
         }
     }
@@ -272,8 +288,9 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             )
             Text(
                 text = if (editing) "EDIT MODE — drag to reposition"
-                    else if (isConnected) "Connected to ${connectedName}" + if (connectionMode == "bluetooth") " (BT)" else ""
+                    else if (isConnected) "Connected to ${connectedName}" + if (connectionMode == "bluetooth" || connectionMode == "gamepad") " (BT)" else ""
                     else if (connectionMode == "bluetooth") blePeripheral.statusMessage.ifEmpty { "Bluetooth — starting..." }
+                    else if (connectionMode == "gamepad") btController.statusMessage.ifEmpty { "Gamepad — starting..." }
                     else if (isConnecting) "Searching for server... (${connectionMode})"
                     else "Offline",
                 color = if (editing) Color(0xFF4488FF) else Color.Gray,
@@ -377,20 +394,22 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 serverHost = serverHost,
                 onConnectionModeChange = { mode ->
                     // Stop current mode
-                    if (connectionMode == "bluetooth") {
-                        blePeripheral.stop()
-                    } else {
-                        sender.stop()
+                    when (connectionMode) {
+                        "bluetooth" -> blePeripheral.stop()
+                        "gamepad" -> btController.stop()
+                        else -> sender.stop()
                     }
                     connectionMode = mode
                     layoutStore.setConnectionMode(mode)
                     // Start new mode
-                    if (mode == "bluetooth") {
-                        blePeripheral.start()
-                    } else {
-                        sender.mode = mode
-                        sender.serverHost = layoutStore.getServerHost()
-                        sender.start()
+                    when (mode) {
+                        "bluetooth" -> blePeripheral.start()
+                        "gamepad" -> btController.start()
+                        else -> {
+                            sender.mode = mode
+                            sender.serverHost = layoutStore.getServerHost()
+                            sender.start()
+                        }
                     }
                     syncState()
                 },
@@ -407,7 +426,14 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     editing = true
                 },
                 onResetLayout = { layoutStore.clear() },
-                onClose = { showSettings = false }
+                onClose = { showSettings = false },
+                btController = btController,
+                onMakeDiscoverable = {
+                    val intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+                        putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+                    }
+                    try { activity.startActivity(intent) } catch (_: Exception) {}
+                },
             )
         }
     }
@@ -740,6 +766,8 @@ fun SettingsOverlay(
     onEditLayout: () -> Unit,
     onResetLayout: () -> Unit,
     onClose: () -> Unit,
+    btController: BluetoothHidController,
+    onMakeDiscoverable: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -750,11 +778,13 @@ fun SettingsOverlay(
     ) {
         Column(
             modifier = Modifier
-                .width(300.dp)
+                .width(340.dp)
+                .heightIn(max = 360.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0xFF1a1a1a))
                 .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
-                .padding(20.dp),
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Title + X close
@@ -775,17 +805,17 @@ fun SettingsOverlay(
 
             // -- Connection Mode --
             Text("Connection", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("wifi" to "WiFi", "cable" to "Cable (USB)", "bluetooth" to "Bluetooth").forEach { (mode, label) ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("wifi" to "WiFi", "cable" to "USB", "bluetooth" to "iPad BT", "gamepad" to "Gamepad").forEach { (mode, label) ->
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (connectionMode == mode) Color(0xFF4488FF).copy(0.25f) else Color.White.copy(0.06f))
                             .border(1.dp, if (connectionMode == mode) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.1f), RoundedCornerShape(8.dp))
                             .pointerInput(mode) { detectTapGestures { onConnectionModeChange(mode) } }
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
-                        Text(label, color = if (connectionMode == mode) Color(0xFF4488FF) else Color.Gray, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text(label, color = if (connectionMode == mode) Color(0xFF4488FF) else Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -832,9 +862,51 @@ fun SettingsOverlay(
                 )
             } else if (connectionMode == "bluetooth") {
                 Text(
-                    "Phone registers as a Bluetooth gamepad.\nPair from your Mac/PC/console via Bluetooth settings.\nDevice will be discoverable for 5 minutes.",
+                    "Bluetooth link to the iPad Controller app.\nOpen Controller on the iPad and it will find this phone.",
                     color = Color.Gray, fontSize = 10.sp
                 )
+            } else if (connectionMode == "gamepad") {
+                Text(
+                    "Phone acts as a real Bluetooth gamepad — works with any Mac, PC, or Android TV, no app needed on the other side.\n(Not iPhone/iPad — Apple only allows Xbox/PS pads. Use iPad BT for that.)",
+                    color = Color.Gray, fontSize = 10.sp
+                )
+                // First time: make phone visible so the computer can pair with it
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF4488FF).copy(0.15f))
+                        .border(1.dp, Color(0xFF4488FF).copy(0.4f), RoundedCornerShape(8.dp))
+                        .pointerInput("discoverable") { detectTapGestures { onMakeDiscoverable() } }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("Make phone discoverable (new pairing)", color = Color(0xFF4488FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                // Already paired: tap to connect
+                val paired = remember { btController.pairedDevices() }
+                if (paired.isNotEmpty()) {
+                    Text("Paired devices — tap to connect:", color = Color.Gray, fontSize = 10.sp)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        paired.take(5).forEach { device ->
+                            val name = try { device.name ?: device.address } catch (_: SecurityException) { device.address }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White.copy(0.06f))
+                                    .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(8.dp))
+                                    .pointerInput(device.address) {
+                                        detectTapGestures {
+                                            btController.connectTo(device)
+                                            onClose()
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(name, color = Color.White.copy(0.8f), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
             } else {
                 Text(
                     "Connect USB cable and open Controller on Mac.\nADB reverse forwarding is automatic.",

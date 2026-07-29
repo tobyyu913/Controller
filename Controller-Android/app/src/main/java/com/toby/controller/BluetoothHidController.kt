@@ -5,8 +5,15 @@ import android.bluetooth.*
 import android.content.Context
 import java.util.concurrent.Executors
 
+/**
+ * Registers the phone as a real Bluetooth HID gamepad, so it works with ANY host
+ * (Mac, Windows, Linux, Android TV, Quest...) — no receiver app needed.
+ *
+ * Uses the Android 9+ BluetoothHidDevice profile. The host pairs with the phone
+ * from its normal Bluetooth settings, exactly like a real controller.
+ */
 @SuppressLint("MissingPermission")
-class BluetoothHidController(private val context: Context) {
+class BluetoothHidController(private val context: Context, private val layoutStore: LayoutStore) {
 
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var hidDevice: BluetoothHidDevice? = null
@@ -19,47 +26,65 @@ class BluetoothHidController(private val context: Context) {
         private set
     var connectedDeviceName = ""
         private set
+    var statusMessage = ""
+        private set
     var onStateChanged: (() -> Unit)? = null
 
-    // HID Report Descriptor: standard gamepad
-    // 16 buttons + 4 axes (left stick X/Y, right stick Rx/Ry)
-    // Total report size: 6 bytes
+    // Last report sent — replayed when the host asks via GET_REPORT
+    private val lastReport = ByteArray(7).also { it[2] = HAT_NEUTRAL; it[3] = 128.toByte(); it[4] = 128.toByte(); it[5] = 128.toByte(); it[6] = 128.toByte() }
+
+    // HID Report Descriptor: standard gamepad, report ID 1.
+    // 14 buttons + hat switch (D-Pad) + 4 axes (X/Y = left stick, Z/Rz = right stick).
+    // Report: [buttons lo][buttons hi][hat][X][Y][Z][Rz] = 7 bytes.
     private val hidDescriptor = byteArrayOf(
-        0x05, 0x01,                    // Usage Page (Generic Desktop)
-        0x09, 0x05,                    // Usage (Gamepad)
-        0xA1.toByte(), 0x01,           // Collection (Application)
+        0x05, 0x01,                          // Usage Page (Generic Desktop)
+        0x09, 0x05,                          // Usage (Gamepad)
+        0xA1.toByte(), 0x01,                 // Collection (Application)
+        0x85.toByte(), REPORT_ID,            //   Report ID (1)
 
-        // 16 Buttons
-        0x05, 0x09,                    //   Usage Page (Button)
-        0x19, 0x01,                    //   Usage Minimum (1)
-        0x29, 0x10,                    //   Usage Maximum (16)
-        0x15, 0x00,                    //   Logical Minimum (0)
-        0x25, 0x01,                    //   Logical Maximum (1)
-        0x95.toByte(), 0x10,           //   Report Count (16)
-        0x75, 0x01,                    //   Report Size (1)
-        0x81.toByte(), 0x02,           //   Input (Data, Variable, Absolute)
+        // 14 Buttons + 2 bits padding
+        0x05, 0x09,                          //   Usage Page (Button)
+        0x19, 0x01,                          //   Usage Minimum (1)
+        0x29, 0x0E,                          //   Usage Maximum (14)
+        0x15, 0x00,                          //   Logical Minimum (0)
+        0x25, 0x01,                          //   Logical Maximum (1)
+        0x75, 0x01,                          //   Report Size (1)
+        0x95.toByte(), 0x0E,                 //   Report Count (14)
+        0x81.toByte(), 0x02,                 //   Input (Data, Variable, Absolute)
+        0x75, 0x01,                          //   Report Size (1)
+        0x95.toByte(), 0x02,                 //   Report Count (2)
+        0x81.toByte(), 0x03,                 //   Input (Constant) — padding
 
-        // Left Stick (X, Y)
-        0x05, 0x01,                    //   Usage Page (Generic Desktop)
-        0x09, 0x30,                    //   Usage (X)
-        0x09, 0x31,                    //   Usage (Y)
-        0x15, 0x81.toByte(),           //   Logical Minimum (-127)
-        0x25, 0x7F,                    //   Logical Maximum (127)
-        0x95.toByte(), 0x02,           //   Report Count (2)
-        0x75, 0x08,                    //   Report Size (8)
-        0x81.toByte(), 0x02,           //   Input (Data, Variable, Absolute)
+        // Hat switch (D-Pad), 8 directions, null state
+        0x05, 0x01,                          //   Usage Page (Generic Desktop)
+        0x09, 0x39,                          //   Usage (Hat switch)
+        0x15, 0x00,                          //   Logical Minimum (0)
+        0x25, 0x07,                          //   Logical Maximum (7)
+        0x35, 0x00,                          //   Physical Minimum (0)
+        0x46, 0x3B, 0x01,                    //   Physical Maximum (315)
+        0x65, 0x14,                          //   Unit (degrees)
+        0x75, 0x04,                          //   Report Size (4)
+        0x95.toByte(), 0x01,                 //   Report Count (1)
+        0x81.toByte(), 0x42,                 //   Input (Data, Variable, Absolute, Null State)
+        0x75, 0x04,                          //   Report Size (4)
+        0x95.toByte(), 0x01,                 //   Report Count (1)
+        0x81.toByte(), 0x03,                 //   Input (Constant) — padding
 
-        // Right Stick (Rx, Ry)
-        0x09, 0x33,                    //   Usage (Rx)
-        0x09, 0x34,                    //   Usage (Ry)
-        0x95.toByte(), 0x02,           //   Report Count (2)
-        0x75, 0x08,                    //   Report Size (8)
-        0x81.toByte(), 0x02,           //   Input (Data, Variable, Absolute)
+        // Axes: X, Y (left stick), Z, Rz (right stick), 0..255 centered at 128
+        0x09, 0x30,                          //   Usage (X)
+        0x09, 0x31,                          //   Usage (Y)
+        0x09, 0x32,                          //   Usage (Z)
+        0x09, 0x35,                          //   Usage (Rz)
+        0x15, 0x00,                          //   Logical Minimum (0)
+        0x26, 0xFF.toByte(), 0x00,           //   Logical Maximum (255)
+        0x75, 0x08,                          //   Report Size (8)
+        0x95.toByte(), 0x04,                 //   Report Count (4)
+        0x81.toByte(), 0x02,                 //   Input (Data, Variable, Absolute)
 
-        0xC0.toByte()                  // End Collection
+        0xC0.toByte()                        // End Collection
     )
 
-    // Button name → bit position in the 16-bit button field
+    // Button name → bit position in the 16-bit button field (D-Pad is the hat switch, not a button)
     private val buttonBitMap = mapOf(
         "Cross" to 0,
         "Circle" to 1,
@@ -73,22 +98,38 @@ class BluetoothHidController(private val context: Context) {
         "Options" to 9,
         "L3" to 10,
         "R3" to 11,
-        "DPadUp" to 12,
-        "DPadDown" to 13,
-        "DPadLeft" to 14,
-        "DPadRight" to 15,
+        "PS" to 12,
+        "Touchpad" to 13,
     )
 
     fun start() {
-        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return
-        bluetoothAdapter = manager.adapter ?: return
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        if (manager == null) {
+            statusMessage = "No Bluetooth manager"
+            onStateChanged?.invoke()
+            return
+        }
+        bluetoothAdapter = manager.adapter
+        if (bluetoothAdapter == null) {
+            statusMessage = "No Bluetooth adapter"
+            onStateChanged?.invoke()
+            return
+        }
+        if (bluetoothAdapter?.isEnabled != true) {
+            statusMessage = "Bluetooth is OFF — enable it in Settings"
+            onStateChanged?.invoke()
+            return
+        }
 
-        if (bluetoothAdapter?.isEnabled != true) return
+        statusMessage = "Getting HID profile..."
+        onStateChanged?.invoke()
 
         bluetoothAdapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
                 if (profile == BluetoothProfile.HID_DEVICE) {
                     hidDevice = proxy as? BluetoothHidDevice
+                    statusMessage = "Registering as gamepad..."
+                    onStateChanged?.invoke()
                     registerHidDevice()
                 }
             }
@@ -98,6 +139,7 @@ class BluetoothHidController(private val context: Context) {
                     hidDevice = null
                     isRegistered = false
                     isConnected = false
+                    statusMessage = "HID profile disconnected"
                     onStateChanged?.invoke()
                 }
             }
@@ -118,6 +160,17 @@ class BluetoothHidController(private val context: Context) {
         val callback = object : BluetoothHidDevice.Callback() {
             override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
                 isRegistered = registered
+                if (registered) {
+                    statusMessage = "Gamepad ready — pair from the other device, or tap a paired device in Settings"
+                    // Auto-reconnect: try the plugged device, else the last host we talked to
+                    val target = pluggedDevice ?: lastHostDevice()
+                    if (target != null) {
+                        statusMessage = "Gamepad ready — connecting to ${target.name ?: target.address}..."
+                        hidDevice?.connect(target)
+                    }
+                } else {
+                    statusMessage = "Registration failed — this phone's Bluetooth may not support HID device mode"
+                }
                 onStateChanged?.invoke()
             }
 
@@ -127,18 +180,71 @@ class BluetoothHidController(private val context: Context) {
                         hostDevice = device
                         isConnected = true
                         connectedDeviceName = device?.name ?: device?.address ?: "device"
+                        statusMessage = "Connected to $connectedDeviceName"
+                        device?.address?.let { layoutStore.setLastBtHost(it) }
+                    }
+                    BluetoothProfile.STATE_CONNECTING -> {
+                        statusMessage = "Connecting to ${device?.name ?: device?.address}..."
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         hostDevice = null
                         isConnected = false
                         connectedDeviceName = ""
+                        statusMessage = "Disconnected — waiting for host"
                     }
                 }
                 onStateChanged?.invoke()
             }
+
+            // Hosts (macOS/Windows) query the current report during setup.
+            // Not answering stalls enumeration — this was missing before.
+            override fun onGetReport(device: BluetoothDevice?, type: Byte, id: Byte, bufferSize: Int) {
+                val hid2 = hidDevice ?: return
+                if (device == null) return
+                if (type == BluetoothHidDevice.REPORT_TYPE_INPUT) {
+                    hid2.replyReport(device, type, REPORT_ID, lastReport)
+                } else {
+                    hid2.reportError(device, BluetoothHidDevice.ERROR_RSP_UNSUPPORTED_REQ)
+                }
+            }
+
+            override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) {
+                val hid2 = hidDevice ?: return
+                if (device == null) return
+                hid2.reportError(device, BluetoothHidDevice.ERROR_RSP_SUCCESS)
+            }
         }
 
-        hid.registerApp(sdp, null, null, executor, callback)
+        val result = hid.registerApp(sdp, null, null, executor, callback)
+        if (!result) {
+            statusMessage = "registerApp() failed — another app may be using BT HID"
+            onStateChanged?.invoke()
+        }
+    }
+
+    /** Bonded devices the user can tap to connect to (most recent host first). */
+    fun pairedDevices(): List<BluetoothDevice> {
+        val bonded = bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
+        val last = layoutStore.getLastBtHost()
+        return bonded.sortedByDescending { it.address == last }
+    }
+
+    /** Initiate a connection to an already-paired host. */
+    fun connectTo(device: BluetoothDevice) {
+        val hid = hidDevice
+        if (hid == null || !isRegistered) {
+            statusMessage = "Gamepad not registered yet"
+            onStateChanged?.invoke()
+            return
+        }
+        statusMessage = "Connecting to ${device.name ?: device.address}..."
+        onStateChanged?.invoke()
+        hid.connect(device)
+    }
+
+    private fun lastHostDevice(): BluetoothDevice? {
+        val addr = layoutStore.getLastBtHost().takeIf { it.isNotEmpty() } ?: return null
+        return bluetoothAdapter?.bondedDevices?.firstOrNull { it.address == addr }
     }
 
     fun send(message: ControllerMessage) {
@@ -146,10 +252,9 @@ class BluetoothHidController(private val context: Context) {
         val device = hostDevice ?: return
         if (!isConnected) return
 
-        // Build 6-byte HID report: [buttons_lo][buttons_hi][lx][ly][rx][ry]
-        val report = ByteArray(6)
+        val report = ByteArray(7)
 
-        // 16-bit button field
+        // 14-bit button field (2 bytes)
         var buttons = 0
         for (btn in message.pressedButtons) {
             val bit = buttonBitMap[btn] ?: continue
@@ -158,14 +263,34 @@ class BluetoothHidController(private val context: Context) {
         report[0] = (buttons and 0xFF).toByte()
         report[1] = ((buttons shr 8) and 0xFF).toByte()
 
-        // Analog sticks: map -1.0..1.0 to -127..127
-        report[2] = (message.leftStickX * 127).toInt().coerceIn(-127, 127).toByte()
-        report[3] = (message.leftStickY * 127).toInt().coerceIn(-127, 127).toByte()
-        report[4] = (message.rightStickX * 127).toInt().coerceIn(-127, 127).toByte()
-        report[5] = (message.rightStickY * 127).toInt().coerceIn(-127, 127).toByte()
+        // Hat switch from D-Pad buttons: 0=N 1=NE 2=E 3=SE 4=S 5=SW 6=W 7=NW, 8=neutral
+        val up = "DPadUp" in message.pressedButtons
+        val down = "DPadDown" in message.pressedButtons
+        val left = "DPadLeft" in message.pressedButtons
+        val right = "DPadRight" in message.pressedButtons
+        report[2] = when {
+            up && right -> 1
+            down && right -> 3
+            down && left -> 5
+            up && left -> 7
+            up -> 0
+            right -> 2
+            down -> 4
+            left -> 6
+            else -> HAT_NEUTRAL.toInt()
+        }.toByte()
 
-        hid.sendReport(device, 0, report)
+        // Sticks: -1.0..1.0 → 0..255 centered at 128 (Y down = positive, matches HID)
+        report[3] = axis(message.leftStickX)
+        report[4] = axis(message.leftStickY)
+        report[5] = axis(message.rightStickX)
+        report[6] = axis(message.rightStickY)
+
+        report.copyInto(lastReport)
+        hid.sendReport(device, REPORT_ID.toInt(), report)
     }
+
+    private fun axis(v: Double): Byte = (128 + v * 127).toInt().coerceIn(0, 255).toByte()
 
     fun stop() {
         try { hidDevice?.unregisterApp() } catch (_: Exception) {}
@@ -177,5 +302,10 @@ class BluetoothHidController(private val context: Context) {
             bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hidDevice)
         } catch (_: Exception) {}
         hidDevice = null
+    }
+
+    companion object {
+        const val REPORT_ID: Byte = 1
+        const val HAT_NEUTRAL: Byte = 8
     }
 }
