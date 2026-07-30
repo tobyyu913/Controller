@@ -282,6 +282,9 @@ class InputMapper {
     @ObservationIgnored private let lock = NSLock()
     @ObservationIgnored private let tickQueue = DispatchQueue(label: "controller.mouse", qos: .userInteractive)
     @ObservationIgnored private var tickTimer: DispatchSourceTimer?
+    // HID-system event source: synthetic events indistinguishable from hardware
+    // for games that filter by source state
+    @ObservationIgnored private let eventSource = CGEventSource(stateID: .hidSystemState)
 
     init() {
         mapping.load()
@@ -374,12 +377,12 @@ class InputMapper {
         }
         if let mouse {
             let pos = CGEvent(source: nil)?.location ?? .zero
-            guard let event = CGEvent(mouseEventSource: nil, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
+            guard let event = CGEvent(mouseEventSource: eventSource, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
             event.setIntegerValueField(.mouseEventClickState, value: 1)
             event.post(tap: .cghidEventTap)
             return
         }
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down) else { return }
+        guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: down) else { return }
         event.post(tap: .cghidEventTap)
     }
 
@@ -388,12 +391,13 @@ class InputMapper {
         var newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
 
         // Never let the cursor pin against the screen edge: camera input dies there
-        // (and clicks land on the menu bar / Dock instead of the game). Like games
-        // do, warp back to the center of the display and keep sending deltas.
+        // (and clicks land on the menu bar / Dock instead of the game). Relocate to
+        // display center via the posted event itself — NOT CGWarpMouseCursorPosition,
+        // which suppresses mouse events briefly after each warp and caused a visible
+        // hitch on every sustained camera turn.
         let bounds = displayBounds(for: currentPos)
         if !bounds.insetBy(dx: 4, dy: 4).contains(newPos) {
             newPos = CGPoint(x: bounds.midX, y: bounds.midY)
-            CGWarpMouseCursorPosition(newPos)
         }
 
         // While a mouse button is held, real mice emit *dragged* events, not moves
@@ -407,7 +411,7 @@ class InputMapper {
             type = .mouseMoved; button = .left
         }
 
-        guard let moveEvent = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: newPos, mouseButton: button) else { return }
+        guard let moveEvent = CGEvent(mouseEventSource: eventSource, mouseType: type, mouseCursorPosition: newPos, mouseButton: button) else { return }
         // Games lock the cursor and read RELATIVE deltas — position alone is invisible to them
         moveEvent.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
         moveEvent.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
