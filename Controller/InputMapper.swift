@@ -358,6 +358,7 @@ class InputMapper {
     }
 
     @ObservationIgnored private var cachedPos = CGPoint.zero
+    @ObservationIgnored private var cachedCenter = CGPoint.zero
     @ObservationIgnored private var cursorHidden = false
     @ObservationIgnored private var tickCount = 0
     @ObservationIgnored private var carryX = 0.0
@@ -380,6 +381,8 @@ class InputMapper {
             if !cursorHidden || cachedPos == .zero {
                 cachedPos = CGEvent(source: nil)?.location ?? cachedPos
             }
+            let b = displayBounds(for: cachedPos)
+            cachedCenter = CGPoint(x: b.midX, y: b.midY)
         }
 
         guard abs(rx) > 0.1 || abs(ry) > 0.1 else {
@@ -460,7 +463,9 @@ class InputMapper {
         default: mouse = nil
         }
         if let mouse {
-            let pos = CGEvent(source: nil)?.location ?? .zero
+            let pos = cursorHidden && cachedCenter != .zero
+                ? cachedCenter
+                : (CGEvent(source: nil)?.location ?? .zero)
             guard let event = CGEvent(mouseEventSource: eventSource, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
             event.setIntegerValueField(.mouseEventClickState, value: 1)
             event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
@@ -473,7 +478,10 @@ class InputMapper {
     }
 
     private func moveMouse(ix: Int64, iy: Int64, heldLeft: Bool, heldRight: Bool) {
-        var newPos = cachedPos
+        // Captured games hold the hidden cursor at display center (re-warping it
+        // constantly). Pin there too so our position writes and the game's warps
+        // agree instead of fighting 120x/s.
+        var newPos = cursorHidden && cachedCenter != .zero ? cachedCenter : cachedPos
 
         if !cursorHidden {
             // Cursor visible (desktop / game menus): move the pointer normally,
