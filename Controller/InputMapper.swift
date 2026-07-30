@@ -12,6 +12,12 @@ import CoreGraphics
 import Carbon.HIToolbox
 import SwiftUI
 
+// CGCursorIsVisible was dropped from the SDK headers but the symbol still exists
+// in CoreGraphics; games hide the cursor in camera mode, which is our signal to
+// pin the pointer and send pure deltas.
+@_silgen_name("CGCursorIsVisible")
+private func CG_CursorIsVisible() -> boolean_t
+
 // MARK: - Mouse button pseudo key codes
 // Sentinel values far above any real CGKeyCode; postKey turns them into mouse clicks.
 
@@ -388,16 +394,20 @@ class InputMapper {
 
     private func moveMouse(dx: Double, dy: Double, heldLeft: Bool, heldRight: Bool) {
         let currentPos = CGEvent(source: nil)?.location ?? .zero
-        var newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
+        var newPos: CGPoint
 
-        // Never let the cursor pin against the screen edge: camera input dies there
-        // (and clicks land on the menu bar / Dock instead of the game). Relocate to
-        // display center via the posted event itself — NOT CGWarpMouseCursorPosition,
-        // which suppresses mouse events briefly after each warp and caused a visible
-        // hitch on every sustained camera turn.
-        let bounds = displayBounds(for: currentPos)
-        if !bounds.insetBy(dx: 4, dy: 4).contains(newPos) {
-            newPos = CGPoint(x: bounds.midX, y: bounds.midY)
+        if CG_CursorIsVisible() == 0 {
+            // Cursor hidden = a game is in camera mode reading relative deltas.
+            // PIN the pointer: it never travels, never hits an edge, never needs
+            // relocation — the delta fields below carry all the motion.
+            newPos = currentPos
+        } else {
+            // Cursor visible (desktop / game menus): move the pointer normally,
+            // stopping at the display edge exactly like a real mouse.
+            let bounds = displayBounds(for: currentPos)
+            newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
+            newPos.x = min(max(newPos.x, bounds.minX), bounds.maxX - 1)
+            newPos.y = min(max(newPos.y, bounds.minY), bounds.maxY - 1)
         }
 
         // While a mouse button is held, real mice emit *dragged* events, not moves
