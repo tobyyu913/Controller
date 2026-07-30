@@ -12,6 +12,15 @@ import CoreGraphics
 import Carbon.HIToolbox
 import SwiftUI
 
+// MARK: - Mouse button pseudo key codes
+// Sentinel values far above any real CGKeyCode; postKey turns them into mouse clicks.
+
+enum MouseCode {
+    static let left: CGKeyCode = 0xF001
+    static let right: CGKeyCode = 0xF002
+    static let middle: CGKeyCode = 0xF003
+}
+
 // MARK: - Key Code ↔ Name
 
 struct KeyNames {
@@ -47,6 +56,7 @@ struct KeyNames {
         CGKeyCode(kVK_ANSI_Comma): ",", CGKeyCode(kVK_ANSI_Period): ".",
         CGKeyCode(kVK_ANSI_Slash): "/", CGKeyCode(kVK_ANSI_Backslash): "\\",
         CGKeyCode(kVK_ANSI_Grave): "`",
+        MouseCode.left: "Mouse L", MouseCode.right: "Mouse R", MouseCode.middle: "Mouse M",
     ]
 
     static func name(for code: CGKeyCode) -> String {
@@ -114,6 +124,7 @@ struct ControllerMapping {
         case fps = "FPS"
         case racing = "Racing"
         case platformer = "Platformer"
+        case wuwa = "WuWa"
 
         var id: String { rawValue }
     }
@@ -178,6 +189,34 @@ struct ControllerMapping {
             m.setKey("options", to: CGKeyCode(kVK_Escape))
             m.setKey("create", to: CGKeyCode(kVK_Return))
             m.mouseSensitivity = 10.0
+
+        case .wuwa:
+            // Wuthering Waves — mirrors the game's own PS5 layout on its PC keybinds:
+            // Square=attack, Triangle=skill, R1=dash, R2=liberation, L1=echo,
+            // D-Pad=switch resonators, R3=target lock
+            m.setKey("lstickUp", to: CGKeyCode(kVK_ANSI_W))
+            m.setKey("lstickDown", to: CGKeyCode(kVK_ANSI_S))
+            m.setKey("lstickLeft", to: CGKeyCode(kVK_ANSI_A))
+            m.setKey("lstickRight", to: CGKeyCode(kVK_ANSI_D))
+            m.setKey("square", to: MouseCode.left)             // normal attack
+            m.setKey("cross", to: CGKeyCode(kVK_Space))        // jump
+            m.setKey("circle", to: CGKeyCode(kVK_ANSI_F))      // interact (O on PS5)
+            m.setKey("triangle", to: CGKeyCode(kVK_ANSI_E))    // resonance skill
+            m.setKey("r1", to: CGKeyCode(kVK_Shift))           // dash/dodge
+            m.setKey("r2", to: CGKeyCode(kVK_ANSI_R))          // resonance liberation
+            m.setKey("l1", to: CGKeyCode(kVK_ANSI_Q))          // echo skill
+            m.setKey("l2", to: CGKeyCode(kVK_ANSI_T))          // utility (grapple etc.)
+            m.setKey("l3", to: CGKeyCode(kVK_Control))         // walk toggle
+            m.setKey("r3", to: MouseCode.middle)               // target lock
+            m.setKey("dpadUp", to: CGKeyCode(kVK_ANSI_1))      // resonator 1
+            m.setKey("dpadLeft", to: CGKeyCode(kVK_ANSI_2))    // resonator 2
+            m.setKey("dpadRight", to: CGKeyCode(kVK_ANSI_3))   // resonator 3
+            m.setKey("dpadDown", to: CGKeyCode(kVK_ANSI_4))    // resonator 4
+            m.setKey("create", to: CGKeyCode(kVK_Tab))         // utilities wheel
+            m.setKey("options", to: CGKeyCode(kVK_Escape))     // menu
+            m.setKey("ps", to: CGKeyCode(kVK_ANSI_M))          // map
+            m.setKey("touchpad", to: CGKeyCode(kVK_ANSI_B))    // backpack
+            m.mouseSensitivity = 15.0
         }
         return m
     }
@@ -288,6 +327,20 @@ class InputMapper {
     }
 
     private func postKey(_ keyCode: CGKeyCode, down: Bool) {
+        // Mouse button pseudo-codes → click at the current cursor position
+        let mouse: (type: CGEventType, button: CGMouseButton)?
+        switch keyCode {
+        case MouseCode.left: mouse = (down ? .leftMouseDown : .leftMouseUp, .left)
+        case MouseCode.right: mouse = (down ? .rightMouseDown : .rightMouseUp, .right)
+        case MouseCode.middle: mouse = (down ? .otherMouseDown : .otherMouseUp, .center)
+        default: mouse = nil
+        }
+        if let mouse {
+            let pos = CGEvent(source: nil)?.location ?? .zero
+            guard let event = CGEvent(mouseEventSource: nil, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
+            event.post(tap: .cghidEventTap)
+            return
+        }
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down) else { return }
         event.post(tap: .cghidEventTap)
     }
