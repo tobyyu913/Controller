@@ -31,6 +31,16 @@ namespace {
 constexpr const char* kSocketPath = "/tmp/controller-vhid.sock";
 std::atomic<bool> exit_flag(false);
 std::atomic<bool> pointing_ready(false);
+std::atomic<int> client_fd(-1);
+
+// Tell the app whether the virtual device is actually usable, so its status
+// badge reflects the driver, not merely that this helper is reachable.
+void report_ready(bool ready) {
+  int fd = client_fd.load();
+  if (fd < 0) return;
+  std::string line = ready ? "ready 1\n" : "ready 0\n";
+  ::write(fd, line.c_str(), line.size());
+}
 }
 
 int main() {
@@ -66,6 +76,7 @@ int main() {
     if (pointing_ready != r) {
       std::cout << "pointing_ready " << r << std::endl;
       pointing_ready = r;
+      report_ready(r);
     }
   });
 
@@ -97,6 +108,8 @@ int main() {
     int fd = ::accept(server_fd, nullptr, nullptr);
     if (fd < 0) continue;
     std::cout << "app connected" << std::endl;
+    client_fd = fd;
+    report_ready(pointing_ready);
 
     std::string buffer;
     char chunk[512];
@@ -131,6 +144,7 @@ int main() {
       }
     }
 
+    client_fd = -1;
     ::close(fd);
     std::cout << "app disconnected" << std::endl;
 

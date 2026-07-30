@@ -20,8 +20,10 @@ final class VirtualMouse {
     private let lock = NSLock()
     private let socketPath = "/tmp/controller-vhid.sock"
 
-    /// True when connected to the bridge helper and reports are flowing.
+    /// True when connected to the bridge helper.
     private(set) var isConnected = false
+    /// True when the helper reports the virtual HID device is actually usable.
+    private(set) var isReady = false
 
     var isAvailable: Bool {
         FileManager.default.fileExists(atPath: socketPath)
@@ -69,12 +71,31 @@ final class VirtualMouse {
         return true
     }
 
+    /// Drain any "ready 0/1" status lines the helper sent. Call periodically.
+    func pollStatus() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fd >= 0 else { return }
+        var buf = [UInt8](repeating: 0, count: 256)
+        while true {
+            let n = read(fd, &buf, buf.count)
+            if n <= 0 { break }
+            if let text = String(bytes: buf[0..<n], encoding: .utf8) {
+                for line in text.split(separator: "\n") {
+                    if line.hasPrefix("ready ") { isReady = line.hasSuffix("1") }
+                }
+            }
+            if n < buf.count { break }
+        }
+    }
+
     func disconnect() {
         lock.lock()
         defer { lock.unlock() }
         if fd >= 0 { close(fd) }
         fd = -1
         isConnected = false
+        isReady = false
     }
 
     /// buttons: bit0 = left, bit1 = right, bit2 = middle
@@ -98,6 +119,7 @@ final class VirtualMouse {
             close(fd)
             fd = -1
             isConnected = false
+            isReady = false
         }
     }
 }

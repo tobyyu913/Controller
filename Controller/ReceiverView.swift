@@ -327,10 +327,11 @@ struct UniversalView: View {
                             UserDefaults.standard.set(mapper.virtualMouseMode, forKey: "virtualMouseMode")
                             if mapper.virtualMouseMode {
                                 _ = VirtualMouse.shared.connect()
+                                VirtualMouse.shared.pollStatus()
                             } else {
                                 VirtualMouse.shared.disconnect()
                             }
-                            vhidConnected = VirtualMouse.shared.isConnected
+                            vhidConnected = VirtualMouse.shared.isReady
                         }
                     Spacer()
                     if mapper.virtualMouseMode {
@@ -527,7 +528,8 @@ struct UniversalView: View {
             axTrusted = AXIsProcessTrusted()
             if mapper.virtualMouseMode {
                 if !VirtualMouse.shared.isConnected { _ = VirtualMouse.shared.connect() }
-                vhidConnected = VirtualMouse.shared.isConnected
+                VirtualMouse.shared.pollStatus()
+                vhidConnected = VirtualMouse.shared.isReady
             }
         }
         .onDisappear {
