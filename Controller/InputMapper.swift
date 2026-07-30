@@ -277,9 +277,28 @@ class InputMapper {
     var isEnabled = false
 
     private var pressedKeys: Set<CGKeyCode> = []
+    private var rightX = 0.0
+    private var rightY = 0.0
+    private var mouseTimer: Timer?
 
     init() {
         mapping.load()
+        // 60 Hz camera loop: the phone only sends messages on CHANGE, so a held
+        // stick sends nothing — continuous mouse movement must be driven here.
+        mouseTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.mouseTick()
+        }
+    }
+
+    deinit {
+        mouseTimer?.invalidate()
+    }
+
+    private func mouseTick() {
+        guard isEnabled else { return }
+        if abs(rightX) > 0.1 || abs(rightY) > 0.1 {
+            moveMouse(dx: rightX * mapping.mouseSensitivity, dy: rightY * mapping.mouseSensitivity)
+        }
     }
 
     func process(_ message: ControllerMessage?) {
@@ -298,12 +317,9 @@ class InputMapper {
             setKey(mapping.keyCode(for: id), pressed: buttons.contains(button))
         }
 
-        // Right stick → mouse
-        let rx = msg.rightStickX
-        let ry = msg.rightStickY
-        if abs(rx) > 0.1 || abs(ry) > 0.1 {
-            moveMouse(dx: rx * mapping.mouseSensitivity, dy: ry * mapping.mouseSensitivity)
-        }
+        // Right stick → remembered for the 60 Hz mouse loop
+        rightX = msg.rightStickX
+        rightY = msg.rightStickY
     }
 
     func releaseAll() {
@@ -311,6 +327,8 @@ class InputMapper {
             postKey(key, down: false)
         }
         pressedKeys.removeAll()
+        rightX = 0
+        rightY = 0
     }
 
     // MARK: - CGEvent helpers
@@ -338,6 +356,7 @@ class InputMapper {
         if let mouse {
             let pos = CGEvent(source: nil)?.location ?? .zero
             guard let event = CGEvent(mouseEventSource: nil, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
             event.post(tap: .cghidEventTap)
             return
         }
@@ -348,7 +367,22 @@ class InputMapper {
     private func moveMouse(dx: Double, dy: Double) {
         let currentPos = CGEvent(source: nil)?.location ?? .zero
         let newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
-        guard let moveEvent = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: newPos, mouseButton: .left) else { return }
+
+        // While a mouse button is held, real mice emit *dragged* events, not moves
+        let type: CGEventType
+        let button: CGMouseButton
+        if pressedKeys.contains(MouseCode.left) {
+            type = .leftMouseDragged; button = .left
+        } else if pressedKeys.contains(MouseCode.right) {
+            type = .rightMouseDragged; button = .right
+        } else {
+            type = .mouseMoved; button = .left
+        }
+
+        guard let moveEvent = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: newPos, mouseButton: button) else { return }
+        // Games lock the cursor and read RELATIVE deltas — position alone is invisible to them
+        moveEvent.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
+        moveEvent.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
         moveEvent.post(tap: .cghidEventTap)
     }
 }
