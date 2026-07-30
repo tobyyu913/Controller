@@ -1,0 +1,153 @@
+//
+// controller-vhid-bridge
+//
+// Bridges the Controller mac app to the Karabiner DriverKit virtual HID
+// pointing device, so controller camera input appears to games as REAL
+// hardware mouse motion (IOHID level), not synthetic CGEvents.
+//
+// Runs as root (the daemon socket is root-only). Listens on a unix socket
+// (/tmp/controller-vhid.sock, mode 0666) for one line-based client:
+//
+//   p <buttons> <dx> <dy>\n     buttons: bit0=left bit1=right bit2=middle
+//
+// Build: see build.sh (needs the Karabiner-DriverKit-VirtualHIDDevice sources).
+//
+
+#include <atomic>
+#include <csignal>
+#include <cstring>
+#include <iostream>
+#include <mutex>
+#include <string>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#include <pqrs/karabiner/driverkit/virtual_hid_device_driver.hpp>
+#include <pqrs/karabiner/driverkit/virtual_hid_device_service.hpp>
+
+namespace {
+constexpr const char* kSocketPath = "/tmp/controller-vhid.sock";
+std::atomic<bool> exit_flag(false);
+std::atomic<bool> pointing_ready(false);
+}
+
+int main() {
+  std::signal(SIGINT, [](int) { exit_flag = true; });
+  std::signal(SIGTERM, [](int) { exit_flag = true; });
+  std::signal(SIGPIPE, SIG_IGN);
+
+  pqrs::dispatcher::extra::initialize_shared_dispatcher();
+
+  std::mutex client_mutex;
+  auto client = std::make_unique<pqrs::karabiner::driverkit::virtual_hid_device_service::client>();
+
+  client->connected.connect([&client] {
+    std::cout << "daemon connected; initializing virtual pointing" << std::endl;
+    client->async_virtual_hid_pointing_initialize();
+  });
+  client->connect_failed.connect([](auto&& error_code) {
+    std::cout << "connect_failed " << error_code << std::endl;
+  });
+  client->closed.connect([] {
+    pointing_ready = false;
+    std::cout << "daemon connection closed" << std::endl;
+  });
+  client->driver_activated.connect([](auto&& activated) {
+    static std::optional<bool> prev;
+    if (prev != activated) {
+      std::cout << "driver_activated " << activated << std::endl;
+      prev = activated;
+    }
+  });
+  client->virtual_hid_pointing_ready.connect([](auto&& ready) {
+    bool r = ready;
+    if (pointing_ready != r) {
+      std::cout << "pointing_ready " << r << std::endl;
+      pointing_ready = r;
+    }
+  });
+
+  client->async_start();
+
+  //
+  // Unix socket server
+  //
+
+  ::unlink(kSocketPath);
+  int server_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (server_fd < 0) {
+    std::cerr << "socket() failed" << std::endl;
+    return 1;
+  }
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, kSocketPath, sizeof(addr.sun_path) - 1);
+  if (::bind(server_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+    std::cerr << "bind() failed" << std::endl;
+    return 1;
+  }
+  ::chmod(kSocketPath, 0666);
+  ::listen(server_fd, 1);
+
+  std::cout << "listening on " << kSocketPath << std::endl;
+
+  while (!exit_flag) {
+    int fd = ::accept(server_fd, nullptr, nullptr);
+    if (fd < 0) continue;
+    std::cout << "app connected" << std::endl;
+
+    std::string buffer;
+    char chunk[512];
+    while (!exit_flag) {
+      ssize_t n = ::read(fd, chunk, sizeof(chunk));
+      if (n <= 0) break;
+      buffer.append(chunk, static_cast<size_t>(n));
+
+      size_t pos;
+      while ((pos = buffer.find('\n')) != std::string::npos) {
+        std::string line = buffer.substr(0, pos);
+        buffer.erase(0, pos + 1);
+
+        int buttons = 0, dx = 0, dy = 0;
+        if (std::sscanf(line.c_str(), "p %d %d %d", &buttons, &dx, &dy) == 3) {
+          if (!pointing_ready) continue;
+
+          pqrs::karabiner::driverkit::virtual_hid_device_driver::hid_report::pointing_input report;
+          if (buttons & 1) report.buttons.insert(1); // left
+          if (buttons & 2) report.buttons.insert(2); // right
+          if (buttons & 4) report.buttons.insert(3); // middle
+          dx = std::max(-127, std::min(127, dx));
+          dy = std::max(-127, std::min(127, dy));
+          report.x = static_cast<uint8_t>(static_cast<int8_t>(dx));
+          report.y = static_cast<uint8_t>(static_cast<int8_t>(dy));
+
+          std::lock_guard<std::mutex> lock(client_mutex);
+          if (client) {
+            client->async_post_report(report);
+          }
+        }
+      }
+    }
+
+    ::close(fd);
+    std::cout << "app disconnected" << std::endl;
+
+    // Release any held buttons when the app goes away
+    if (pointing_ready) {
+      pqrs::karabiner::driverkit::virtual_hid_device_driver::hid_report::pointing_input report;
+      std::lock_guard<std::mutex> lock(client_mutex);
+      if (client) {
+        client->async_post_report(report);
+      }
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    client = nullptr;
+  }
+  pqrs::dispatcher::extra::terminate_shared_dispatcher();
+  return 0;
+}

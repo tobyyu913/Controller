@@ -285,6 +285,9 @@ class InputMapper {
     /// WuWa mode: post events straight into the frontmost game's process
     /// (CGEvent.postToPid), bypassing system-wide pointer routing entirely.
     var gameInjectionMode = UserDefaults.standard.bool(forKey: "gameInjectionMode")
+    /// Route mouse motion through the virtual HID device (real hardware path)
+    /// instead of synthetic CGEvents.
+    var virtualMouseMode = UserDefaults.standard.bool(forKey: "virtualMouseMode")
     @ObservationIgnored private var targetPid: pid_t = 0
 
     @ObservationIgnored private var pressedKeys: Set<CGKeyCode> = []
@@ -412,7 +415,18 @@ class InputMapper {
         carryX -= Double(ix)
         carryY -= Double(iy)
         if ix != 0 || iy != 0 {
-            moveMouse(ix: ix, iy: iy, heldLeft: heldLeft, heldRight: heldRight)
+            if virtualMouseMode {
+                lock.lock()
+                let heldMiddle = pressedKeys.contains(MouseCode.middle)
+                lock.unlock()
+                var btns = 0
+                if heldLeft { btns |= 1 }
+                if heldRight { btns |= 2 }
+                if heldMiddle { btns |= 4 }
+                VirtualMouse.shared.send(buttons: btns, dx: Int(ix), dy: Int(iy))
+            } else {
+                moveMouse(ix: ix, iy: iy, heldLeft: heldLeft, heldRight: heldRight)
+            }
         }
     }
 
@@ -474,6 +488,16 @@ class InputMapper {
         case MouseCode.middle: mouse = (down ? .otherMouseDown : .otherMouseUp, .center)
         default: mouse = nil
         }
+        // Virtual mouse mode: clicks ride the HID device too (button state, no motion)
+        if virtualMouseMode, keyCode == MouseCode.left || keyCode == MouseCode.right || keyCode == MouseCode.middle {
+            var btns = 0
+            if pressedKeys.contains(MouseCode.left) { btns |= 1 }
+            if pressedKeys.contains(MouseCode.right) { btns |= 2 }
+            if pressedKeys.contains(MouseCode.middle) { btns |= 4 }
+            VirtualMouse.shared.send(buttons: btns, dx: 0, dy: 0)
+            return
+        }
+
         if let mouse {
             let pos = cursorHidden && cachedCenter != .zero
                 ? cachedCenter

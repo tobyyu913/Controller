@@ -240,6 +240,7 @@ struct UniversalView: View {
     @State private var keyListener = KeyListener()
     @State private var activePreset: String = "Custom"
     @State private var axTrusted = AXIsProcessTrusted()
+    @State private var vhidConnected = false
     private let axTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -315,6 +316,30 @@ struct UniversalView: View {
                     Spacer()
                 }
                 Text("Sends input straight to the frontmost app's process, bypassing the system pointer. Turn on, then click into the game.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+
+                // Virtual hardware mouse
+                HStack {
+                    Toggle("Real mouse mode (virtual HID hardware)", isOn: $mapper.virtualMouseMode)
+                        .toggleStyle(.switch)
+                        .onChange(of: mapper.virtualMouseMode) {
+                            UserDefaults.standard.set(mapper.virtualMouseMode, forKey: "virtualMouseMode")
+                            if mapper.virtualMouseMode {
+                                _ = VirtualMouse.shared.connect()
+                            } else {
+                                VirtualMouse.shared.disconnect()
+                            }
+                            vhidConnected = VirtualMouse.shared.isConnected
+                        }
+                    Spacer()
+                    if mapper.virtualMouseMode {
+                        Text(vhidConnected ? "HID OK" : "helper not running")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(vhidConnected ? .green : .red)
+                    }
+                }
+                Text("Motion is delivered as genuine mouse hardware, for games that ignore synthetic input. Requires the controller-vhid-bridge helper (run with sudo).")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
 
@@ -500,6 +525,10 @@ struct UniversalView: View {
         }
         .onReceive(axTimer) { _ in
             axTrusted = AXIsProcessTrusted()
+            if mapper.virtualMouseMode {
+                if !VirtualMouse.shared.isConnected { _ = VirtualMouse.shared.connect() }
+                vhidConnected = VirtualMouse.shared.isConnected
+            }
         }
         .onDisappear {
             keyListener.stop()
