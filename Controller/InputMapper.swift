@@ -286,8 +286,7 @@ class InputMapper {
     @ObservationIgnored private var rightX = 0.0
     @ObservationIgnored private var rightY = 0.0
     @ObservationIgnored private let lock = NSLock()
-    @ObservationIgnored private let tickQueue = DispatchQueue(label: "controller.mouse", qos: .userInteractive)
-    @ObservationIgnored private var tickTimer: DispatchSourceTimer?
+    @ObservationIgnored private var tickStopped = false
     // HID-system event source: synthetic events indistinguishable from hardware
     // for games that filter by source state
     @ObservationIgnored private let eventSource = CGEventSource(stateID: .hidSystemState)
@@ -310,18 +309,52 @@ class InputMapper {
 
     init() {
         mapping.load()
-        // 60 Hz camera loop on a dedicated queue: the phone only sends messages on
-        // CHANGE, so a held stick sends nothing — continuous movement is driven here.
-        // Off the main thread so UI redraws can never stutter the camera.
-        let t = DispatchSource.makeTimerSource(queue: tickQueue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(1))
-        t.setEventHandler { [weak self] in self?.mouseTick() }
-        t.resume()
-        tickTimer = t
+        startTickThread()
     }
 
     deinit {
-        tickTimer?.cancel()
+        tickStopped = true
+    }
+
+    /// Camera loop on a REAL-TIME thread (same scheduling class as pro audio).
+    /// Ordinary background-app threads get starved when a game saturates the
+    /// machine — that read as camera stutter that vanished for ~1s whenever the
+    /// app was touched. Time-constraint scheduling guarantees our 8ms cadence
+    /// regardless of app frontmost state or system load.
+    private func startTickThread() {
+        let thread = Thread { [weak self] in
+            var tbinfo = mach_timebase_info_data_t()
+            mach_timebase_info(&tbinfo)
+            let nsPerTick = Double(tbinfo.numer) / Double(tbinfo.denom)
+
+            var policy = thread_time_constraint_policy(
+                period: UInt32(8_000_000 / nsPerTick),        // every 8ms
+                computation: UInt32(1_000_000 / nsPerTick),   // ~1ms of work
+                constraint: UInt32(4_000_000 / nsPerTick),    // finish within 4ms
+                preemptible: 1
+            )
+            let count = mach_msg_type_number_t(
+                MemoryLayout<thread_time_constraint_policy>.size / MemoryLayout<integer_t>.size)
+            withUnsafeMutablePointer(to: &policy) { ptr in
+                ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
+                    _ = thread_policy_set(mach_thread_self(),
+                                          thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY),
+                                          intPtr, count)
+                }
+            }
+
+            let step = UInt64(8_000_000 / nsPerTick)
+            var next = mach_absolute_time()
+            while true {
+                guard let self, !self.tickStopped else { break }
+                self.mouseTick()
+                next += step
+                mach_wait_until(next)
+            }
+        }
+        thread.name = "controller.mouse.rt"
+        thread.qualityOfService = .userInteractive
+        thread.start()
     }
 
     @ObservationIgnored private var cachedPos = CGPoint.zero
