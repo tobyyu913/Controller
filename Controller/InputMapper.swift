@@ -401,10 +401,12 @@ class InputMapper {
             let pos = CGEvent(source: nil)?.location ?? .zero
             guard let event = CGEvent(mouseEventSource: eventSource, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
             event.setIntegerValueField(.mouseEventClickState, value: 1)
+            event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
             event.post(tap: .cghidEventTap)
             return
         }
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: down) else { return }
+        event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
         event.post(tap: .cghidEventTap)
     }
 
@@ -441,6 +443,8 @@ class InputMapper {
         // Games lock the cursor and read RELATIVE deltas — position alone is invisible to them
         moveEvent.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
         moveEvent.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
+        // Real mice carry hardware timestamps; engines weight camera velocity by them
+        moveEvent.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
         moveEvent.post(tap: .cghidEventTap)
     }
 
