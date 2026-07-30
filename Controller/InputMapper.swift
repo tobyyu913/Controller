@@ -276,39 +276,51 @@ class InputMapper {
     var mapping = ControllerMapping()
     var isEnabled = false
 
-    private var pressedKeys: Set<CGKeyCode> = []
-    private var rightX = 0.0
-    private var rightY = 0.0
-    private var mouseTimer: Timer?
+    @ObservationIgnored private var pressedKeys: Set<CGKeyCode> = []
+    @ObservationIgnored private var rightX = 0.0
+    @ObservationIgnored private var rightY = 0.0
+    @ObservationIgnored private let lock = NSLock()
+    @ObservationIgnored private let tickQueue = DispatchQueue(label: "controller.mouse", qos: .userInteractive)
+    @ObservationIgnored private var tickTimer: DispatchSourceTimer?
 
     init() {
         mapping.load()
-        // 60 Hz camera loop: the phone only sends messages on CHANGE, so a held
-        // stick sends nothing — continuous mouse movement must be driven here.
-        // .common mode keeps it firing during UI interaction (default mode pauses).
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.mouseTick()
-        }
-        timer.tolerance = 0.002
-        RunLoop.main.add(timer, forMode: .common)
-        mouseTimer = timer
+        // 60 Hz camera loop on a dedicated queue: the phone only sends messages on
+        // CHANGE, so a held stick sends nothing — continuous movement is driven here.
+        // Off the main thread so UI redraws can never stutter the camera.
+        let t = DispatchSource.makeTimerSource(queue: tickQueue)
+        t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(1))
+        t.setEventHandler { [weak self] in self?.mouseTick() }
+        t.resume()
+        tickTimer = t
     }
 
     deinit {
-        mouseTimer?.invalidate()
+        tickTimer?.cancel()
     }
 
     private func mouseTick() {
         guard isEnabled else { return }
-        if abs(rightX) > 0.1 || abs(rightY) > 0.1 {
-            moveMouse(dx: rightX * mapping.mouseSensitivity, dy: rightY * mapping.mouseSensitivity)
+        lock.lock()
+        let rx = rightX
+        let ry = rightY
+        let heldLeft = pressedKeys.contains(MouseCode.left)
+        let heldRight = pressedKeys.contains(MouseCode.right)
+        lock.unlock()
+        if abs(rx) > 0.1 || abs(ry) > 0.1 {
+            moveMouse(dx: rx * mapping.mouseSensitivity, dy: ry * mapping.mouseSensitivity,
+                      heldLeft: heldLeft, heldRight: heldRight)
         }
     }
 
+    /// Thread-safe: called from the network queue (hot path), not the main thread.
     func process(_ message: ControllerMessage?) {
         guard isEnabled, let msg = message else { return }
 
         let buttons = Set(msg.pressedButtons)
+
+        lock.lock()
+        defer { lock.unlock() }
 
         // Left stick → directional keys
         setKey(mapping.keyCode(for: "lstickUp"), pressed: msg.leftStickY < -mapping.stickThreshold)
@@ -321,12 +333,14 @@ class InputMapper {
             setKey(mapping.keyCode(for: id), pressed: buttons.contains(button))
         }
 
-        // Right stick → remembered for the 60 Hz mouse loop
+        // Right stick → remembered for the mouse loop
         rightX = msg.rightStickX
         rightY = msg.rightStickY
     }
 
     func releaseAll() {
+        lock.lock()
+        defer { lock.unlock() }
         for key in pressedKeys {
             postKey(key, down: false)
         }
@@ -368,7 +382,7 @@ class InputMapper {
         event.post(tap: .cghidEventTap)
     }
 
-    private func moveMouse(dx: Double, dy: Double) {
+    private func moveMouse(dx: Double, dy: Double, heldLeft: Bool, heldRight: Bool) {
         let currentPos = CGEvent(source: nil)?.location ?? .zero
         var newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
 
@@ -384,9 +398,9 @@ class InputMapper {
         // While a mouse button is held, real mice emit *dragged* events, not moves
         let type: CGEventType
         let button: CGMouseButton
-        if pressedKeys.contains(MouseCode.left) {
+        if heldLeft {
             type = .leftMouseDragged; button = .left
-        } else if pressedKeys.contains(MouseCode.right) {
+        } else if heldRight {
             type = .rightMouseDragged; button = .right
         } else {
             type = .mouseMoved; button = .left

@@ -30,6 +30,13 @@ class ControllerServer {
     private var listener: NWListener?
     private var connections: [String: NWConnection] = [:]
 
+    // Hot path: called on the network queue for EVERY message, bypassing SwiftUI.
+    // UI state (latestMessage) is published separately, throttled.
+    @ObservationIgnored var onMessage: ((ControllerMessage) -> Void)?
+    @ObservationIgnored private let netQueue = DispatchQueue(label: "controller.net", qos: .userInteractive)
+    @ObservationIgnored private var lastUIPublish = Date.distantPast
+    @ObservationIgnored private var lastUIButtons: [String]? = nil
+
     #if os(macOS)
     private var usbTimer: DispatchSourceTimer?
     #endif
@@ -145,7 +152,7 @@ class ControllerServer {
             }
         }
 
-        conn.start(queue: .main)
+        conn.start(queue: netQueue)
     }
 
     func removeClient(id: String) {
@@ -174,12 +181,9 @@ class ControllerServer {
 
             conn.receive(minimumIncompleteLength: Int(length), maximumLength: Int(length)) { [weak self] payload, _, _, error in
                 if let payload, let msg = ControllerMessage.decoded(from: payload) {
-                    DispatchQueue.main.async {
-                        if let idx = self?.connectedClients.firstIndex(where: { $0.id == clientId }) {
-                            self?.connectedClients[idx].latestMessage = msg
-                        }
-                        self?.latestMessage = msg
-                    }
+                    // Hot path first: feed the input mapper immediately, off the main thread
+                    self?.onMessage?(msg)
+                    self?.publishToUI(msg, clientId: clientId)
                 }
                 if error == nil {
                     self?.readFrame(from: conn, clientId: clientId)
@@ -187,6 +191,22 @@ class ControllerServer {
                     DispatchQueue.main.async { self?.removeClient(id: clientId) }
                 }
             }
+        }
+    }
+
+    // Publish to SwiftUI at most ~60x/s (button changes always go through immediately)
+    private func publishToUI(_ msg: ControllerMessage, clientId: String) {
+        let now = Date()
+        let buttonsChanged = msg.pressedButtons != lastUIButtons
+        guard buttonsChanged || now.timeIntervalSince(lastUIPublish) >= 0.016 else { return }
+        lastUIPublish = now
+        lastUIButtons = msg.pressedButtons
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let idx = self.connectedClients.firstIndex(where: { $0.id == clientId }) {
+                self.connectedClients[idx].latestMessage = msg
+            }
+            self.latestMessage = msg
         }
     }
 

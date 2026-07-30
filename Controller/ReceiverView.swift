@@ -480,6 +480,9 @@ struct UniversalView: View {
         .onAppear {
             sensitivity = mapper.mapping.mouseSensitivity
             axTrusted = AXIsProcessTrusted()
+            // Direct network→mapper hot path, bypassing SwiftUI entirely
+            let m = mapper
+            server.onMessage = { msg in m.process(msg) }
         }
         .onReceive(axTimer) { _ in
             axTrusted = AXIsProcessTrusted()
@@ -498,11 +501,6 @@ struct UniversalView: View {
             rebindingId = nil
             activePreset = "Custom"
         }
-        .onChange(of: server.latestMessage?.pressedButtons) { mapper.process(server.latestMessage) }
-        .onChange(of: server.latestMessage?.leftStickX) { mapper.process(server.latestMessage) }
-        .onChange(of: server.latestMessage?.leftStickY) { mapper.process(server.latestMessage) }
-        .onChange(of: server.latestMessage?.rightStickX) { mapper.process(server.latestMessage) }
-        .onChange(of: server.latestMessage?.rightStickY) { mapper.process(server.latestMessage) }
     }
 
     private func isEntryActive(_ entry: MappingEntry, msg: ControllerMessage?) -> Bool {
