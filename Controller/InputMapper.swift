@@ -324,6 +324,12 @@ class InputMapper {
         tickTimer?.cancel()
     }
 
+    @ObservationIgnored private var cachedPos = CGPoint.zero
+    @ObservationIgnored private var cursorHidden = false
+    @ObservationIgnored private var tickCount = 0
+    @ObservationIgnored private var carryX = 0.0
+    @ObservationIgnored private var carryY = 0.0
+
     private func mouseTick() {
         guard isEnabled else { return }
         lock.lock()
@@ -332,10 +338,33 @@ class InputMapper {
         let heldLeft = pressedKeys.contains(MouseCode.left)
         let heldRight = pressedKeys.contains(MouseCode.right)
         lock.unlock()
-        if abs(rx) > 0.1 || abs(ry) > 0.1 {
-            // Ticks run at 120 Hz; sensitivity is calibrated as px per 1/60s, so halve per tick
-            moveMouse(dx: rx * mapping.mouseSensitivity * 0.5, dy: ry * mapping.mouseSensitivity * 0.5,
-                      heldLeft: heldLeft, heldRight: heldRight)
+
+        // Query the window system RARELY (every ~200ms), never per tick: synchronous
+        // queries stall randomly while the GPU is loaded, clumping our event stream.
+        tickCount += 1
+        if tickCount % 25 == 1 {
+            cursorHidden = CG_CursorIsVisible() == 0
+            if !cursorHidden || cachedPos == .zero {
+                cachedPos = CGEvent(source: nil)?.location ?? cachedPos
+            }
+        }
+
+        guard abs(rx) > 0.1 || abs(ry) > 0.1 else {
+            carryX = 0
+            carryY = 0
+            return
+        }
+
+        // Ticks run at 120 Hz; sensitivity is calibrated as px per 1/60s, so halve per
+        // tick. Carry fractional remainders so slow pans don't quantize into steps.
+        carryX += rx * mapping.mouseSensitivity * 0.5
+        carryY += ry * mapping.mouseSensitivity * 0.5
+        let ix = Int64(carryX.rounded())
+        let iy = Int64(carryY.rounded())
+        carryX -= Double(ix)
+        carryY -= Double(iy)
+        if ix != 0 || iy != 0 {
+            moveMouse(ix: ix, iy: iy, heldLeft: heldLeft, heldRight: heldRight)
         }
     }
 
@@ -410,23 +439,20 @@ class InputMapper {
         event.post(tap: .cghidEventTap)
     }
 
-    private func moveMouse(dx: Double, dy: Double, heldLeft: Bool, heldRight: Bool) {
-        let currentPos = CGEvent(source: nil)?.location ?? .zero
-        var newPos: CGPoint
+    private func moveMouse(ix: Int64, iy: Int64, heldLeft: Bool, heldRight: Bool) {
+        var newPos = cachedPos
 
-        if CG_CursorIsVisible() == 0 {
-            // Cursor hidden = a game is in camera mode reading relative deltas.
-            // PIN the pointer: it never travels, never hits an edge, never needs
-            // relocation — the delta fields below carry all the motion.
-            newPos = currentPos
-        } else {
+        if !cursorHidden {
             // Cursor visible (desktop / game menus): move the pointer normally,
             // stopping at the display edge exactly like a real mouse.
-            let bounds = displayBounds(for: currentPos)
-            newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
+            let bounds = displayBounds(for: cachedPos)
+            newPos = CGPoint(x: cachedPos.x + Double(ix), y: cachedPos.y + Double(iy))
             newPos.x = min(max(newPos.x, bounds.minX), bounds.maxX - 1)
             newPos.y = min(max(newPos.y, bounds.minY), bounds.maxY - 1)
+            cachedPos = newPos
         }
+        // Cursor hidden = game camera mode: PIN the pointer at cachedPos — it never
+        // travels, never hits an edge — the delta fields carry all the motion.
 
         // While a mouse button is held, real mice emit *dragged* events, not moves
         let type: CGEventType
@@ -441,8 +467,8 @@ class InputMapper {
 
         guard let moveEvent = CGEvent(mouseEventSource: eventSource, mouseType: type, mouseCursorPosition: newPos, mouseButton: button) else { return }
         // Games lock the cursor and read RELATIVE deltas — position alone is invisible to them
-        moveEvent.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
-        moveEvent.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
+        moveEvent.setIntegerValueField(.mouseEventDeltaX, value: ix)
+        moveEvent.setIntegerValueField(.mouseEventDeltaY, value: iy)
         // Real mice carry hardware timestamps; engines weight camera velocity by them
         moveEvent.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
         moveEvent.post(tap: .cghidEventTap)
