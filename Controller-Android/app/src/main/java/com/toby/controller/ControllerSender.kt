@@ -3,6 +3,7 @@ package com.toby.controller
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import kotlinx.coroutines.*
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -30,10 +31,20 @@ class ControllerSender(private val context: Context) {
         private set
     var onStateChanged: (() -> Unit)? = null
 
+    private var wifiLock: WifiManager.WifiLock? = null
+
     fun start() {
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         isConnecting = true
         onStateChanged?.invoke()
+
+        // Low-latency WiFi mode: stops Android (esp. Xiaomi) from napping the radio
+        // between packets, which added wake-up delay to every input burst.
+        try {
+            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            wifiLock = wm?.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "controller-input")
+            wifiLock?.acquire()
+        } catch (_: Exception) {}
 
         when {
             mode == "cable" -> scope.launch { connectLoop("localhost", FIXED_PORT) }
@@ -131,10 +142,11 @@ class ControllerSender(private val context: Context) {
     }
 
     private suspend fun sendPump() {
-        var lastSent: ControllerMessage? = null
         while (scope.isActive && isConnected) {
+            // Send unconditionally every tick: constant traffic keeps the WiFi
+            // radio in active mode (no power-save wake-up latency spikes).
             val msg = latest.get()
-            if (msg != null && msg != lastSent) {
+            if (msg != null) {
                 val ok = synchronized(writeLock) {
                     val os = outputStream ?: return@synchronized false
                     try {
@@ -150,7 +162,6 @@ class ControllerSender(private val context: Context) {
                     onStateChanged?.invoke()
                     return
                 }
-                lastSent = msg
             }
             delay(8) // ~120 Hz
         }
@@ -171,6 +182,8 @@ class ControllerSender(private val context: Context) {
         scope.cancel()
         closeClient()
         isConnecting = false
+        try { wifiLock?.release() } catch (_: Exception) {}
+        wifiLock = null
     }
 
     fun getLocalIP(): String {

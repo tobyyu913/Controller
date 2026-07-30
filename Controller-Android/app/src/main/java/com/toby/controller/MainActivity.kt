@@ -116,9 +116,30 @@ class ControllerState {
     var rightStick by mutableStateOf(Offset.Zero)
     var stickRadiusPx: Float = 1f
 
-    fun press(button: String) { if (button !in pressedButtons) pressedButtons.add(button) }
-    fun release(button: String) { pressedButtons.remove(button) }
+    // Fires on every input mutation so sends happen immediately,
+    // not a UI frame later via recomposition
+    var onInput: (() -> Unit)? = null
+
+    fun press(button: String) {
+        if (button !in pressedButtons) pressedButtons.add(button)
+        onInput?.invoke()
+    }
+    fun release(button: String) {
+        pressedButtons.remove(button)
+        onInput?.invoke()
+    }
     fun isPressed(button: String) = button in pressedButtons
+
+    fun setLeftStick(offset: Offset, radius: Float) {
+        leftStick = offset
+        stickRadiusPx = radius
+        onInput?.invoke()
+    }
+    fun setRightStick(offset: Offset, radius: Float) {
+        rightStick = offset
+        stickRadiusPx = radius
+        onInput?.invoke()
+    }
 
     fun toMessage() = ControllerMessage(
         pressedButtons = pressedButtons.toList(),
@@ -263,17 +284,16 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         syncState()
     }
 
-    LaunchedEffect(
-        state.pressedButtons.toList(),
-        state.leftStick,
-        state.rightStick
-    ) {
-        if (!editing && !showSettings) {
-            val msg = state.toMessage()
-            when (connectionMode) {
-                "bluetooth" -> blePeripheral.send(msg)
-                "gamepad" -> btController.send(msg)
-                else -> sender.send(msg)
+    // Send immediately on every input mutation (no recomposition delay)
+    SideEffect {
+        state.onInput = {
+            if (!editing && !showSettings) {
+                val msg = state.toMessage()
+                when (connectionMode) {
+                    "bluetooth" -> blePeripheral.send(msg)
+                    "gamepad" -> btController.send(msg)
+                    else -> sender.send(msg)
+                }
             }
         }
     }
@@ -382,20 +402,14 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         DraggableElement("lstick", layoutStore, editing, defaults.leftStick) {
             AnalogStick(
                 offset = state.leftStick,
-                onOffsetChange = { offset, radius ->
-                    state.leftStick = offset
-                    state.stickRadiusPx = radius
-                },
+                onOffsetChange = { offset, radius -> state.setLeftStick(offset, radius) },
                 editing = inputDisabled,
             )
         }
         DraggableElement("rstick", layoutStore, editing, defaults.rightStick) {
             AnalogStick(
                 offset = state.rightStick,
-                onOffsetChange = { offset, radius ->
-                    state.rightStick = offset
-                    state.stickRadiusPx = radius
-                },
+                onOffsetChange = { offset, radius -> state.setRightStick(offset, radius) },
                 editing = inputDisabled,
             )
         }

@@ -289,7 +289,7 @@ class InputMapper {
         // CHANGE, so a held stick sends nothing — continuous movement is driven here.
         // Off the main thread so UI redraws can never stutter the camera.
         let t = DispatchSource.makeTimerSource(queue: tickQueue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(1))
+        t.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(1))
         t.setEventHandler { [weak self] in self?.mouseTick() }
         t.resume()
         tickTimer = t
@@ -308,7 +308,8 @@ class InputMapper {
         let heldRight = pressedKeys.contains(MouseCode.right)
         lock.unlock()
         if abs(rx) > 0.1 || abs(ry) > 0.1 {
-            moveMouse(dx: rx * mapping.mouseSensitivity, dy: ry * mapping.mouseSensitivity,
+            // Ticks run at 120 Hz; sensitivity is calibrated as px per 1/60s, so halve per tick
+            moveMouse(dx: rx * mapping.mouseSensitivity * 0.5, dy: ry * mapping.mouseSensitivity * 0.5,
                       heldLeft: heldLeft, heldRight: heldRight)
         }
     }
