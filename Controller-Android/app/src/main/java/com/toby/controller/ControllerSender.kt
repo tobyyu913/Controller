@@ -7,12 +7,15 @@ import kotlinx.coroutines.*
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicReference
 
 class ControllerSender(private val context: Context) {
     private var socket: Socket? = null
     private var outputStream: OutputStream? = null
     private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val writeLock = Any()
+    private val latest = AtomicReference<ControllerMessage?>(null)
+    private var senderJob: Job? = null
 
     private var nsdManager: NsdManager? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
@@ -56,6 +59,12 @@ class ControllerSender(private val context: Context) {
 
                 // Send initial empty state so server has data immediately
                 send(ControllerMessage(emptyList(), 0.0, 0.0, 0.0, 0.0))
+
+                // Single ordered send pump at ~120 Hz: always transmits the LATEST
+                // state, in order, on a steady clock — never one task per message
+                // (unordered) and never tied to the UI frame cadence.
+                senderJob?.cancel()
+                senderJob = scope.launch { sendPump() }
 
                 // Stay connected until socket is closed by send failure or stop()
                 while (scope.isActive && isConnected) {
@@ -116,19 +125,34 @@ class ControllerSender(private val context: Context) {
         start()
     }
 
+    /** Cheap and thread-safe: just records the newest state; sendPump transmits it. */
     fun send(message: ControllerMessage) {
-        if (outputStream == null) return
-        scope.launch {
-            synchronized(writeLock) {
-                val os = outputStream ?: return@launch
-                try {
-                    os.write(message.toFramedBytes())
-                    os.flush()
-                } catch (_: Exception) {
-                    closeClient()
-                    onStateChanged?.invoke()
+        latest.set(message)
+    }
+
+    private suspend fun sendPump() {
+        var lastSent: ControllerMessage? = null
+        while (scope.isActive && isConnected) {
+            val msg = latest.get()
+            if (msg != null && msg != lastSent) {
+                val ok = synchronized(writeLock) {
+                    val os = outputStream ?: return@synchronized false
+                    try {
+                        os.write(msg.toFramedBytes())
+                        os.flush()
+                        true
+                    } catch (_: Exception) {
+                        closeClient()
+                        false
+                    }
                 }
+                if (!ok) {
+                    onStateChanged?.invoke()
+                    return
+                }
+                lastSent = msg
             }
+            delay(8) // ~120 Hz
         }
     }
 
