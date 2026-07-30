@@ -305,6 +305,19 @@ struct UniversalView: View {
                     }
                 }
 
+                // WuWa / game injection mode
+                HStack {
+                    Toggle("WuWa mode (inject input directly into the game)", isOn: $mapper.gameInjectionMode)
+                        .toggleStyle(.switch)
+                        .onChange(of: mapper.gameInjectionMode) {
+                            UserDefaults.standard.set(mapper.gameInjectionMode, forKey: "gameInjectionMode")
+                        }
+                    Spacer()
+                }
+                Text("Sends input straight to the frontmost app's process, bypassing the system pointer. Turn on, then click into the game.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+
                 // Presets
                 HStack(spacing: 8) {
                     Text("Presets:")

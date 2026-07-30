@@ -11,6 +11,7 @@ import Foundation
 import CoreGraphics
 import Carbon.HIToolbox
 import SwiftUI
+import AppKit
 
 // CGCursorIsVisible was dropped from the SDK headers but the symbol still exists
 // in CoreGraphics; games hide the cursor in camera mode, which is our signal to
@@ -281,6 +282,10 @@ private let buttonToMappingId: [String: String] = [
 class InputMapper {
     var mapping = ControllerMapping()
     var isEnabled = false
+    /// WuWa mode: post events straight into the frontmost game's process
+    /// (CGEvent.postToPid), bypassing system-wide pointer routing entirely.
+    var gameInjectionMode = UserDefaults.standard.bool(forKey: "gameInjectionMode")
+    @ObservationIgnored private var targetPid: pid_t = 0
 
     @ObservationIgnored private var pressedKeys: Set<CGKeyCode> = []
     @ObservationIgnored private var rightX = 0.0
@@ -383,6 +388,13 @@ class InputMapper {
             }
             let b = displayBounds(for: cachedPos)
             cachedCenter = CGPoint(x: b.midX, y: b.midY)
+            // Track the frontmost app for WuWa/injection mode (never ourselves)
+            DispatchQueue.main.async { [weak self] in
+                if let app = NSWorkspace.shared.frontmostApplication,
+                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                    self?.targetPid = app.processIdentifier
+                }
+            }
         }
 
         guard abs(rx) > 0.1 || abs(ry) > 0.1 else {
@@ -469,12 +481,12 @@ class InputMapper {
             guard let event = CGEvent(mouseEventSource: eventSource, mouseType: mouse.type, mouseCursorPosition: pos, mouseButton: mouse.button) else { return }
             event.setIntegerValueField(.mouseEventClickState, value: 1)
             event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
-            event.post(tap: .cghidEventTap)
+            postEvent(event)
             return
         }
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: down) else { return }
         event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
-        event.post(tap: .cghidEventTap)
+        postEvent(event)
     }
 
     private func moveMouse(ix: Int64, iy: Int64, heldLeft: Bool, heldRight: Bool) {
@@ -512,7 +524,16 @@ class InputMapper {
         moveEvent.setIntegerValueField(.mouseEventDeltaY, value: iy)
         // Real mice carry hardware timestamps; engines weight camera velocity by them
         moveEvent.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
-        moveEvent.post(tap: .cghidEventTap)
+        postEvent(moveEvent)
+    }
+
+    /// System-wide post by default; WuWa mode injects straight into the game's pid.
+    private func postEvent(_ event: CGEvent) {
+        if gameInjectionMode, targetPid > 0 {
+            event.postToPid(targetPid)
+        } else {
+            event.post(tap: .cghidEventTap)
+        }
     }
 
     private func displayBounds(for point: CGPoint) -> CGRect {
