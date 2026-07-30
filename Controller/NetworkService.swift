@@ -13,6 +13,13 @@ private let fixedPort: UInt16 = 9876
 
 // MARK: - Controller Server (macOS & iPad — accepts multiple phone clients)
 
+// TCP without Nagle's algorithm — controller packets are tiny and latency-critical
+func lowLatencyTCP() -> NWParameters {
+    let tcp = NWProtocolTCP.Options()
+    tcp.noDelay = true
+    return NWParameters(tls: nil, tcp: tcp)
+}
+
 @Observable
 class ControllerServer {
     var isRunning = false
@@ -54,7 +61,7 @@ class ControllerServer {
         guard listener == nil else { return }
         errorMessage = nil
         do {
-            let params = NWParameters.tcp
+            let params = lowLatencyTCP()
             let l = try NWListener(using: params, on: NWEndpoint.Port(rawValue: fixedPort)!)
             #if os(macOS)
             l.service = NWListener.Service(name: "Controller", type: "_ps5ctrl._tcp")
@@ -359,7 +366,7 @@ class ControllerClient {
     }
 
     private func connectToEndpoint(_ endpoint: NWEndpoint) {
-        let conn = NWConnection(to: endpoint, using: .tcp)
+        let conn = NWConnection(to: endpoint, using: lowLatencyTCP())
         setupConnection(conn, name: endpoint.debugDescription)
     }
 

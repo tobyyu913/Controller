@@ -285,9 +285,13 @@ class InputMapper {
         mapping.load()
         // 60 Hz camera loop: the phone only sends messages on CHANGE, so a held
         // stick sends nothing — continuous mouse movement must be driven here.
-        mouseTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        // .common mode keeps it firing during UI interaction (default mode pauses).
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.mouseTick()
         }
+        timer.tolerance = 0.002
+        RunLoop.main.add(timer, forMode: .common)
+        mouseTimer = timer
     }
 
     deinit {

@@ -43,6 +43,7 @@ class ControllerSender(private val context: Context) {
         while (scope.isActive) {
             try {
                 val s = Socket()
+                s.tcpNoDelay = true // disable Nagle: send tiny controller packets immediately
                 s.connect(InetSocketAddress(host, port), 3000)
                 synchronized(this) {
                     socket = s
