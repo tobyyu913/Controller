@@ -291,6 +291,22 @@ class InputMapper {
     // HID-system event source: synthetic events indistinguishable from hardware
     // for games that filter by source state
     @ObservationIgnored private let eventSource = CGEventSource(stateID: .hidSystemState)
+    @ObservationIgnored private var activityToken: NSObjectProtocol?
+
+    /// While mapping is on, hold a latency-critical activity assertion. Without it,
+    /// App Nap throttles our timers ~1s after the game occludes this app — camera
+    /// was buttery for exactly that first second, then coalesced into laggy batches.
+    func updateActivityAssertion() {
+        if isEnabled, activityToken == nil {
+            activityToken = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "Low-latency controller input"
+            )
+        } else if !isEnabled, let token = activityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            activityToken = nil
+        }
+    }
 
     init() {
         mapping.load()

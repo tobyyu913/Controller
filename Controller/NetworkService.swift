@@ -13,6 +13,39 @@ private let fixedPort: UInt16 = 9876
 
 // MARK: - Controller Server (macOS & iPad — accepts multiple phone clients)
 
+// Lightweight diagnostics: records message arrival times, dumps timing stats
+// to /tmp/controller_input_stats.txt every ~2s while input flows.
+final class InputTrace {
+    static let shared = InputTrace()
+    private var times: [Double] = []
+    private let q = DispatchQueue(label: "controller.trace")
+
+    func record() {
+        let now = CFAbsoluteTimeGetCurrent()
+        q.async {
+            self.times.append(now)
+            if self.times.count % 256 == 0 { self.dump() }
+            if self.times.count > 20000 { self.times.removeFirst(10000) }
+        }
+    }
+
+    private func dump() {
+        let arr = Array(times.suffix(2000))
+        guard arr.count > 50 else { return }
+        var gaps: [Double] = []
+        for i in 1..<arr.count { gaps.append((arr[i] - arr[i - 1]) * 1000) }
+        gaps.sort()
+        let n = gaps.count
+        let line = String(
+            format: "msgs:%d p50:%.1fms p95:%.1fms p99:%.1fms max:%.1fms >25ms:%d >50ms:%d >100ms:%d\n",
+            arr.count, gaps[n / 2], gaps[Int(Double(n) * 0.95)], gaps[Int(Double(n) * 0.99)],
+            gaps.last ?? 0, gaps.filter { $0 > 25 }.count, gaps.filter { $0 > 50 }.count,
+            gaps.filter { $0 > 100 }.count
+        )
+        try? line.write(toFile: "/tmp/controller_input_stats.txt", atomically: true, encoding: .utf8)
+    }
+}
+
 // TCP without Nagle's algorithm — controller packets are tiny and latency-critical
 func lowLatencyTCP() -> NWParameters {
     let tcp = NWProtocolTCP.Options()
@@ -181,6 +214,7 @@ class ControllerServer {
 
             conn.receive(minimumIncompleteLength: Int(length), maximumLength: Int(length)) { [weak self] payload, _, _, error in
                 if let payload, let msg = ControllerMessage.decoded(from: payload) {
+                    InputTrace.shared.record()
                     // Hot path first: feed the input mapper immediately, off the main thread
                     self?.onMessage?(msg)
                     self?.publishToUI(msg, clientId: clientId)

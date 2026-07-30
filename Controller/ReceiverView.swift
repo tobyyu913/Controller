@@ -283,6 +283,7 @@ struct UniversalView: View {
                     Toggle("Enable Keyboard/Mouse Mapping", isOn: $mapper.isEnabled)
                         .toggleStyle(.switch)
                         .onChange(of: mapper.isEnabled) {
+                            mapper.updateActivityAssertion()
                             if !mapper.isEnabled {
                                 mapper.releaseAll()
                             } else if !AXIsProcessTrusted() {
