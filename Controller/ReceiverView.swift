@@ -7,6 +7,9 @@
 
 #if os(macOS)
 import SwiftUI
+import AppKit
+import ApplicationServices
+import Combine
 
 struct ReceiverView: View {
     let server: ControllerServer
@@ -236,6 +239,8 @@ struct UniversalView: View {
     @State private var rebindingId: String? = nil
     @State private var keyListener = KeyListener()
     @State private var activePreset: String = "Custom"
+    @State private var axTrusted = AXIsProcessTrusted()
+    private let axTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -249,6 +254,28 @@ struct UniversalView: View {
                         .font(.system(.body, design: .monospaced))
                 }
 
+                // Accessibility permission banner — without it every key/mouse event is silently dropped
+                if !axTrusted {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text("No Accessibility permission — keys will NOT reach games")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.red)
+                        Spacer()
+                        Button("Grant Access...") {
+                            let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+                            AXIsProcessTrustedWithOptions(opts)
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(.red.opacity(0.12))
+                    .cornerRadius(8)
+                }
+
                 Divider()
 
                 // Toggle
@@ -256,7 +283,12 @@ struct UniversalView: View {
                     Toggle("Enable Keyboard/Mouse Mapping", isOn: $mapper.isEnabled)
                         .toggleStyle(.switch)
                         .onChange(of: mapper.isEnabled) {
-                            if !mapper.isEnabled { mapper.releaseAll() }
+                            if !mapper.isEnabled {
+                                mapper.releaseAll()
+                            } else if !AXIsProcessTrusted() {
+                                // Fire the system prompt right when the user tries to use it
+                                AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+                            }
                         }
 
                     Spacer()
@@ -447,6 +479,10 @@ struct UniversalView: View {
         .frame(minWidth: 500, minHeight: 550)
         .onAppear {
             sensitivity = mapper.mapping.mouseSensitivity
+            axTrusted = AXIsProcessTrusted()
+        }
+        .onReceive(axTimer) { _ in
+            axTrusted = AXIsProcessTrusted()
         }
         .onDisappear {
             keyListener.stop()
