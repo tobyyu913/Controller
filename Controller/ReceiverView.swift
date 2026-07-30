@@ -547,12 +547,6 @@ struct MacContentView: View {
             UniversalView(server: server)
                 .tabItem { Label("Universal", systemImage: "keyboard") }
                 .tag("universal")
-            GameView(server: server)
-                .tabItem { Label("Parkour", systemImage: "gamecontroller") }
-                .tag("game")
-            DualGameView(server: server)
-                .tabItem { Label("Co-op", systemImage: "person.2") }
-                .tag("coop")
             ReceiverView(server: server)
                 .tabItem { Label("Debug", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag("debug")
