@@ -114,6 +114,9 @@ struct ControllerMapping {
 
     var mouseSensitivity: Double = 15.0
     var stickThreshold: Double = 0.3
+    /// Camera smoothing time constant in seconds. Larger = smoother but more
+    /// floaty; 0.001 is effectively off.
+    var smoothing: Double = 0.030
 
     func keyCode(for id: String) -> CGKeyCode {
         entries.first(where: { $0.id == id })?.keyCode ?? 0
@@ -238,6 +241,7 @@ struct ControllerMapping {
         }
         defaults.set(mouseSensitivity, forKey: "\(prefix)mouseSens")
         defaults.set(stickThreshold, forKey: "\(prefix)stickThresh")
+        defaults.set(smoothing, forKey: "\(prefix)smoothing")
     }
 
     mutating func load(slot: String = "current") {
@@ -254,6 +258,9 @@ struct ControllerMapping {
         }
         if let thresh = defaults.object(forKey: "\(prefix)stickThresh") as? Double {
             stickThreshold = thresh
+        }
+        if let s = defaults.object(forKey: "\(prefix)smoothing") as? Double {
+            smoothing = s
         }
     }
 
@@ -374,6 +381,8 @@ class InputMapper {
     @ObservationIgnored private var tickCount = 0
     @ObservationIgnored private var carryX = 0.0
     @ObservationIgnored private var carryY = 0.0
+    @ObservationIgnored private var smoothX = 0.0
+    @ObservationIgnored private var smoothY = 0.0
 
     private func mouseTick() {
         guard isEnabled else { return }
@@ -408,7 +417,21 @@ class InputMapper {
             }
         }
 
-        guard abs(rx) > 0.1 || abs(ry) > 0.1 else {
+        // A thumb on glass is sampled far more coarsely than a mouse sensor, and
+        // packets arrive with jitter (measured p50 8ms / p99 22ms). Feeding those
+        // steps straight through makes velocity jump every packet. Ease the stick
+        // value toward its target with a time constant instead: the camera keeps
+        // moving smoothly between samples and gaps stop being visible.
+        let dt = hidPath ? 0.001 : 0.008
+        let tau = max(0.001, mapping.smoothing)
+        let alpha = 1 - exp(-dt / tau)
+        smoothX += (rx - smoothX) * alpha
+        smoothY += (ry - smoothY) * alpha
+
+        // Deadzone on the target, but let the smoothed value coast to a stop
+        if abs(rx) < 0.1 && abs(ry) < 0.1 && abs(smoothX) < 0.004 && abs(smoothY) < 0.004 {
+            smoothX = 0
+            smoothY = 0
             carryX = 0
             carryY = 0
             return
@@ -417,8 +440,8 @@ class InputMapper {
         // Sensitivity is calibrated as pixels per 1/60s frame; convert to this tick's
         // share. Fractional remainders carry over so slow pans don't quantize.
         let perTick = mapping.mouseSensitivity * 60.0 / (hidPath ? 1000.0 : 125.0)
-        carryX += rx * perTick
-        carryY += ry * perTick
+        carryX += smoothX * perTick
+        carryY += smoothY * perTick
         let ix = Int64(carryX.rounded())
         let iy = Int64(carryY.rounded())
         carryX -= Double(ix)

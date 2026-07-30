@@ -236,6 +236,7 @@ struct UniversalView: View {
     let server: ControllerServer
     @State private var mapper = InputMapper()
     @State private var sensitivity: Double = 15.0
+    @State private var smoothingMs: Double = 30.0
     @State private var rebindingId: String? = nil
     @State private var keyListener = KeyListener()
     @State private var activePreset: String = "Custom"
@@ -355,6 +356,7 @@ struct UniversalView: View {
                             mapper.mapping = ControllerMapping.preset(preset)
                             mapper.mapping.save()
                             sensitivity = mapper.mapping.mouseSensitivity
+                            smoothingMs = (mapper.mapping.smoothing * 1000).rounded()
                         } label: {
                             Text(preset.rawValue)
                                 .font(.system(size: 11, weight: activePreset == preset.rawValue ? .bold : .regular, design: .monospaced))
@@ -393,6 +395,7 @@ struct UniversalView: View {
                     Button("Reset") {
                         mapper.mapping.resetDefaults()
                         sensitivity = mapper.mapping.mouseSensitivity
+                        smoothingMs = (mapper.mapping.smoothing * 1000).rounded()
                         activePreset = "Custom"
                     }
                     .font(.system(size: 11))
@@ -412,6 +415,23 @@ struct UniversalView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .frame(width: 30)
                 }
+
+                HStack {
+                    Text("Camera Smoothing")
+                        .font(.system(size: 12, design: .monospaced))
+                    Slider(value: $smoothingMs, in: 0...80, step: 5)
+                        .frame(width: 200)
+                        .onChange(of: smoothingMs) {
+                            mapper.mapping.smoothing = max(0.001, smoothingMs / 1000.0)
+                            mapper.mapping.save()
+                        }
+                    Text(smoothingMs == 0 ? "off" : "\(Int(smoothingMs))ms")
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(width: 40)
+                }
+                Text("Evens out the phone's touch sampling. Higher = smoother but slightly floatier.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
 
                 Divider()
 
@@ -519,6 +539,8 @@ struct UniversalView: View {
         .frame(minWidth: 500, minHeight: 550)
         .onAppear {
             sensitivity = mapper.mapping.mouseSensitivity
+            smoothingMs = (mapper.mapping.smoothing * 1000).rounded()
+            smoothingMs = (mapper.mapping.smoothing * 1000).rounded()
             axTrusted = AXIsProcessTrusted()
             // Direct network→mapper hot path, bypassing SwiftUI entirely
             let m = mapper
