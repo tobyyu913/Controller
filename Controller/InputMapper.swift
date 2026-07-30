@@ -335,10 +335,13 @@ class InputMapper {
             mach_timebase_info(&tbinfo)
             let nsPerTick = Double(tbinfo.numer) / Double(tbinfo.denom)
 
+            // 1000 Hz — matches a gaming mouse's report rate, so each rendered
+            // frame receives a consistent slice of motion instead of an uneven
+            // 1-2-3 reports/frame beat against the game's frame rate.
             var policy = thread_time_constraint_policy(
-                period: UInt32(8_000_000 / nsPerTick),        // every 8ms
-                computation: UInt32(1_000_000 / nsPerTick),   // ~1ms of work
-                constraint: UInt32(4_000_000 / nsPerTick),    // finish within 4ms
+                period: UInt32(1_000_000 / nsPerTick),        // every 1ms
+                computation: UInt32(200_000 / nsPerTick),     // ~0.2ms of work
+                constraint: UInt32(500_000 / nsPerTick),      // finish within 0.5ms
                 preemptible: 1
             )
             let count = mach_msg_type_number_t(
@@ -351,7 +354,7 @@ class InputMapper {
                 }
             }
 
-            let step = UInt64(8_000_000 / nsPerTick)
+            let step = UInt64(1_000_000 / nsPerTick)
             var next = mach_absolute_time()
             while true {
                 guard let self, !self.tickStopped else { break }
@@ -381,10 +384,15 @@ class InputMapper {
         let heldRight = pressedKeys.contains(MouseCode.right)
         lock.unlock()
 
+        // The tick thread runs at 1000 Hz for the HID path; CGEvents are posted at
+        // 125 Hz (flooding the event system does not help and costs CPU).
+        let hidPath = virtualMouseMode
+        tickCount += 1
+        if !hidPath && tickCount % 8 != 0 { return }
+
         // Query the window system RARELY (every ~200ms), never per tick: synchronous
         // queries stall randomly while the GPU is loaded, clumping our event stream.
-        tickCount += 1
-        if tickCount % 25 == 1 {
+        if tickCount % 200 == 1 {
             cursorHidden = CG_CursorIsVisible() == 0
             if !cursorHidden || cachedPos == .zero {
                 cachedPos = CGEvent(source: nil)?.location ?? cachedPos
@@ -406,10 +414,11 @@ class InputMapper {
             return
         }
 
-        // Ticks run at 120 Hz; sensitivity is calibrated as px per 1/60s, so halve per
-        // tick. Carry fractional remainders so slow pans don't quantize into steps.
-        carryX += rx * mapping.mouseSensitivity * 0.5
-        carryY += ry * mapping.mouseSensitivity * 0.5
+        // Sensitivity is calibrated as pixels per 1/60s frame; convert to this tick's
+        // share. Fractional remainders carry over so slow pans don't quantize.
+        let perTick = mapping.mouseSensitivity * 60.0 / (hidPath ? 1000.0 : 125.0)
+        carryX += rx * perTick
+        carryY += ry * perTick
         let ix = Int64(carryX.rounded())
         let iy = Int64(carryY.rounded())
         carryX -= Double(ix)
