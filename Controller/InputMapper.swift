@@ -370,7 +370,16 @@ class InputMapper {
 
     private func moveMouse(dx: Double, dy: Double) {
         let currentPos = CGEvent(source: nil)?.location ?? .zero
-        let newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
+        var newPos = CGPoint(x: currentPos.x + dx, y: currentPos.y + dy)
+
+        // Never let the cursor pin against the screen edge: camera input dies there
+        // (and clicks land on the menu bar / Dock instead of the game). Like games
+        // do, warp back to the center of the display and keep sending deltas.
+        let bounds = displayBounds(for: currentPos)
+        if !bounds.insetBy(dx: 4, dy: 4).contains(newPos) {
+            newPos = CGPoint(x: bounds.midX, y: bounds.midY)
+            CGWarpMouseCursorPosition(newPos)
+        }
 
         // While a mouse button is held, real mice emit *dragged* events, not moves
         let type: CGEventType
@@ -388,6 +397,15 @@ class InputMapper {
         moveEvent.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx.rounded()))
         moveEvent.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy.rounded()))
         moveEvent.post(tap: .cghidEventTap)
+    }
+
+    private func displayBounds(for point: CGPoint) -> CGRect {
+        var display: CGDirectDisplayID = 0
+        var count: UInt32 = 0
+        if CGGetDisplaysWithPoint(point, 1, &display, &count) == .success, count > 0 {
+            return CGDisplayBounds(display)
+        }
+        return CGDisplayBounds(CGMainDisplayID())
     }
 }
 
