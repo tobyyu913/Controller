@@ -443,15 +443,9 @@ class InputMapper {
 
         // Sensitivity is calibrated as pixels per 1/60s frame; convert to this tick's
         // share. Fractional remainders carry over so slow pans don't quantize.
-        // Expo response curve, like a real gamepad: squared magnitude gives fine
-        // aim near center and full speed at full tilt. Applied radially so
-        // diagonals aren't distorted.
-        let mag = sqrt(smoothX * smoothX + smoothY * smoothY)
-        let curve = mag > 0.0001 ? pow(min(mag, 1.0), 2.0) / mag : 0.0
-
         let perTick = mapping.mouseSensitivity * 60.0 / (hidPath ? 500.0 : 125.0)
-        carryX += smoothX * curve * perTick
-        carryY += smoothY * curve * perTick
+        carryX += smoothX * perTick
+        carryY += smoothY * perTick
         let ix = Int64(carryX.rounded())
         let iy = Int64(carryY.rounded())
         carryX -= Double(ix)
