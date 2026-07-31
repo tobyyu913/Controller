@@ -1,8 +1,8 @@
 # Controller
 
-Turn your phone into a PS5-style game controller for your Mac — over USB or WiFi. Supports **multiple controllers** simultaneously.
+Turn your phone into a PS5-style game controller for your Mac — over USB, WiFi, or Bluetooth. Supports **multiple controllers** simultaneously, and can deliver camera input as **genuine mouse hardware** for games that ignore synthetic input.
 
-A cross-platform system with native apps for **Android** (Kotlin/Compose), **iOS** (SwiftUI), and **macOS** (SwiftUI/SceneKit). The Mac runs a server, phones connect as clients, and controller input streams in real time. Includes a split-screen co-op platformer for two players.
+A cross-platform system with native apps for **Android** (Kotlin/Compose), **iOS** (SwiftUI), and **macOS** (SwiftUI). The Mac runs a server, phones connect as clients, and controller input streams in real time with a low-latency pipeline tuned end to end (no-delay TCP, 250 Hz sending, real-time threads, 500 Hz virtual HID reports).
 
 ## Download
 
@@ -14,69 +14,58 @@ A cross-platform system with native apps for **Android** (Kotlin/Compose), **iOS
 ## How It Works
 
 ```
-Phone 1 (Android/iOS)                    Mac (macOS) — Server
-┌──────────────────┐                    ┌──────────────────────┐
-│  PS5 Controller  │──── TCP 9876 ────► │  Receiver            │
-│  Touch UI        │  USB (ADB reverse) │  ├─ Universal Mode   │
-└──────────────────┘    or WiFi         │  ├─ Parkour Game     │
-                                        │  ├─ Co-op (2P Split) │
-Phone 2 (Android/iOS)                   │  └─ Debug View       │
-┌──────────────────┐                    │                      │
-│  PS5 Controller  │──── TCP 9876 ────► │  Maps input to keys, │
-│  Touch UI        │                    │  mouse, or 3D game   │
-└──────────────────┘                    └──────────────────────┘
+Phone (Android/iOS)                      Mac (macOS) — Server
+┌──────────────────┐                    ┌────────────────────────────┐
+│  PS5 Controller  │──── TCP 9876 ────► │  Universal Mode            │
+│  Touch UI        │  USB (ADB reverse) │  ├─ keyboard + mouse       │
+└──────────────────┘    or WiFi         │  │  emulation (CGEvents)   │
+                                        │  └─ Real mouse mode        │
+         │                              │     (virtual HID hardware) │
+         └─── Bluetooth HID gamepad ──► │  Debug View                │
+              (any host, no app needed) └────────────────────────────┘
 ```
 
-The Mac runs a TCP server on port 9876 and advertises via Bonjour. Phones discover the server automatically (WiFi) or connect through ADB reverse port forwarding (USB). Multiple phones can connect simultaneously — each becomes a separate controller.
+Four ways to connect:
+
+| Mode | Path | Best for |
+|------|------|----------|
+| **USB** | ADB reverse tunnel, phone → `localhost:9876` | Lowest latency; Wi‑Fi auto-closes while linked |
+| **WiFi** | Bonjour auto-discovery or manual IP | Wireless play on the same network |
+| **Gamepad (BT)** | Phone registers as a real Bluetooth HID gamepad | Any Mac/PC/Android TV — no receiver app needed |
+| **iPad BT** | BLE link to the iPad receiver app | Using an iPad as the receiver |
 
 ## Features
 
-### Phone Controller (iOS & Android)
-- Full PS5 DualSense layout — D-Pad, face buttons, analog sticks, triggers, bumpers, and system buttons
-- Analog sticks with spring-back animation and click (L3/R3) support
-- Haptic feedback on stick press (iOS)
-- Auto-discovery of Mac server via Bonjour/mDNS
-- Manual server IP entry for WiFi, automatic localhost for USB
-- **Edit Mode** (Android only) — tap the gear icon to drag any button/stick to a custom position; layout persists across restarts
+### Phone Controller (Android & iOS)
+- Full PS5 DualSense layout, positioned to match the real controller's geometry
+- **Edit Mode** — drag any button/stick to a custom position; persists across restarts
+- **Bluetooth Gamepad mode** (Android) — the phone becomes a genuine BT HID gamepad: standard hat-switch D-Pad, 14 buttons, dual analog sticks; pairs with any host from its Bluetooth settings
+- Unbuffered touch dispatch + 250 Hz send pump — stick input isn't quantized to the display refresh
+- Low-latency WiFi lock and no-delay TCP so packets leave immediately
+- Haptic feedback, auto-discovery, auto-reconnect to the last Bluetooth host
 
-### Mac Receiver — Four Modes
+### Mac Receiver
 
 **Universal Mode** — use your phone as a controller for *any* game or app:
-- Emulates keyboard + mouse input via macOS Accessibility APIs
-- Default mapping: left stick -> WASD, right stick -> mouse look, face buttons -> Space/E/Q/F, triggers -> Shift/Ctrl
-- 3 built-in presets (FPS, Racing, Platformer) + fully custom rebinding
-- Adjustable mouse sensitivity
+- Emulates keyboard + mouse via macOS Accessibility APIs, or — with **Real mouse mode** — through a **virtual HID pointing device**, indistinguishable from physical mouse hardware (for games like Wuthering Waves that ignore or badly pace synthetic input)
+- Camera pipeline built like a gaming mouse: real-time (audio-class) input thread, constant 500 Hz reports, adjustable smoothing for touch-sampling jitter
+- Presets: **FPS**, **Racing**, **Platformer**, **WuWa** (mirrors the game's PS5 layout onto its PC keybinds, including mouse-button attacks) + fully custom rebinding, with mouse L/R/M bindable
+- Connection panel: live Wi‑Fi address, USB link status with one-click reconnect, and automatic **Wi‑Fi shutoff while a USB cable is linked** so input never arrives over two paths
+- Live Accessibility-permission banner — no more silent failure when macOS revokes it
 
-**Parkour Game** — a built-in 3D platformer to test the controller:
-- SceneKit-based 3D course with 8 checkpoints and 28+ platforms
-- Move with left stick, look with right stick, jump with Circle
-- Sprint (L2) for speed + longer jumps, squat (R2) to slow down
-- Double-jump, coyote time, fall respawn
-- Procedurally generated soundtrack and sound effects
-
-**Co-op Mode** — split-screen dual-player platformer:
-- Two phones, two players, one screen split in half
-- Player 1 (orange) on left, Player 2 (cyan) on right
-- Each player has their own camera with right-stick orbit control
-- Movement is relative to camera facing direction
-- Shared checkpoints and course progression
-
-**Debug View** — live visualization of all controller input:
-- Real-time stick position display with crosshairs
-- Color-coded button state indicators
-- Connected clients list showing all active controllers
+**Debug View** — real-time stick positions, button states, and connected clients.
 
 ### iPad Receiver
-- Runs the same server as macOS — phones connect to iPad too
-- Parkour game + debug view tabs
-- Auto-advertises via Bonjour on the local network
+- Runs the same server as macOS — phones connect to the iPad too
+- Includes a SceneKit parkour game and debug view
 
 ## Requirements
 
-- **macOS** with Xcode installed
-- **Android phone** with USB debugging enabled, or **iOS device/simulator**
-- **ADB** installed (the app searches common install paths automatically) — needed for USB only
+- **macOS** (Xcode to build, or use the DMG)
+- **Android phone** with USB debugging enabled, or **iOS device**
+- **ADB** for USB mode (common install paths are searched automatically)
 - For WiFi: Mac and phone on the same network
+- For Real mouse mode: the [Karabiner virtual HID driver](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases) + bundled helper
 
 ## Building
 
@@ -98,52 +87,53 @@ cd Controller-Android
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-APK output: `Controller-Android/app/build/outputs/apk/debug/app-debug.apk`
-
-### Install on Android Phone
+### Virtual Mouse Helper (Real mouse mode)
 ```bash
-adb install -r Controller-Android/app/build/outputs/apk/debug/app-debug.apk
+cd tools/vhid-bridge
+VHID_SRC=/path/to/Karabiner-DriverKit-VirtualHIDDevice ./build.sh
+sudo ./install.sh          # installs as a root LaunchDaemon
 ```
 
 ## Usage
 
-### Single Controller (USB)
-1. **Connect** your Android phone to your Mac via USB
-2. **Enable USB debugging** on the phone (Settings > Developer Options > USB Debugging)
-3. **Launch the Controller app** on the Mac — it auto-detects the phone and sets up ADB reverse forwarding
-4. **Launch the Controller app** on the phone — set to Cable mode in settings, it connects to localhost:9876
-5. **Choose a mode** on the Mac: Universal, Parkour, Co-op, or Debug
+### USB (recommended — lowest latency)
+1. Connect the phone via USB (USB debugging enabled)
+2. Launch Controller on the Mac — the USB status in the Universal tab shows the phone as *linked* and Wi‑Fi closes automatically
+3. On the phone, pick **USB** in the gear menu
 
-### Single Controller (WiFi)
-1. **Launch the Controller app** on the Mac — server starts and advertises via Bonjour
-2. **Launch the Controller app** on the phone — set to WiFi mode, it auto-discovers the Mac
-3. Alternatively, enter the Mac's IP address manually in the phone's settings
+### WiFi
+1. Launch Controller on the Mac — the Universal tab shows the listen address
+2. On the phone, pick **WiFi** — it auto-discovers the Mac (or enter the IP manually)
 
-### Two Controllers (Co-op)
-1. Connect two phones (USB or WiFi)
-2. Open the **Co-op** tab on the Mac
-3. First phone connected = **P1** (orange, left screen), second = **P2** (cyan, right screen)
-4. Left stick to move, Circle to jump, L2 to sprint, right stick to rotate camera
+### Bluetooth Gamepad (no Mac app needed)
+1. On the phone, pick **Gamepad** in the gear menu
+2. Tap **Make phone discoverable**, then pair from the computer's Bluetooth settings — or tap an already-paired device in the list
+3. The phone shows up as a standard gamepad on any host (note: not iPhone/iPad — Apple only accepts Xbox/PS/MFi controllers)
 
-For Universal Mode, grant **Accessibility permission** when prompted (System Settings > Privacy & Security > Accessibility).
+### Playing games that ignore synthetic input (e.g. Wuthering Waves)
+1. Install the Karabiner driver + helper (see Download)
+2. Universal tab → **Enable Keyboard/Mouse Mapping** → **Real mouse mode** (badge shows green `HID OK`)
+3. Pick the **WuWa** preset and play — camera and clicks arrive as real mouse hardware
+4. Tune **Mouse Sensitivity** and **Camera Smoothing** to taste
+
+Grant **Accessibility permission** when prompted (the Universal tab shows a red banner with a Grant button if it's missing).
 
 ## Architecture
 
-**Server-client model**: The Mac (or iPad) runs a TCP server on port 9876. Phones connect as clients.
+**Server-client model**: the Mac (or iPad) runs a TCP server on port 9876; phones connect as clients.
 
-- **WiFi**: Server advertises via Bonjour (`_ps5ctrl._tcp`). Phones auto-discover or manually enter the server IP.
-- **USB (Android)**: Mac polls for ADB devices and runs `adb reverse tcp:9876 tcp:9876`. The phone connects to `localhost:9876` which tunnels back to the Mac's server.
-- **Multi-client**: The server accepts multiple simultaneous connections. Each connected phone is tracked independently with its own controller state.
+- **WiFi**: Bonjour advertising (`_ps5ctrl._tcp`), auto-discovery, no-delay TCP everywhere
+- **USB (Android)**: the Mac polls ADB and maintains `adb reverse tcp:9876 tcp:9876`; the phone connects to localhost. While a cable client is live, Bonjour stops and Wi‑Fi clients are refused
+- **Input hot path (Mac)**: network thread → mapper → real-time tick thread → CGEvents *or* the virtual HID bridge — the UI is fully out of the input path and updates at a throttled rate
+- **Virtual mouse**: `tools/vhid-bridge` runs as root, bridging a unix socket (4-byte binary records) to the Karabiner DriverKit virtual pointing device at 500 Hz
+- **Multi-client**: multiple phones connect simultaneously, each tracked independently
 
 ## Protocol
 
 TCP on port 9876. Each message is a 4-byte big-endian length prefix followed by a JSON payload:
-
-```
-[4 bytes: length] [JSON payload]
-```
 
 ```json
 {
@@ -155,7 +145,9 @@ TCP on port 9876. Each message is a 4-byte big-endian length prefix followed by 
 }
 ```
 
-Button names: `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, `Triangle`, `Circle`, `Cross`, `Square`, `L1`, `L2`, `R1`, `R2`, `L3`, `R3`, `Create`, `Options`, `PS`, `Touchpad`, `Mute`
+Button names: `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, `Triangle`, `Circle`, `Cross`, `Square`, `L1`, `L2`, `R1`, `R2`, `L3`, `R3`, `Create`, `Options`, `PS`, `Touchpad`
+
+Helper socket (`/tmp/controller-vhid.sock`): fixed 4-byte records `[0xA5][buttons][int8 dx][int8 dy]`.
 
 ## Project Structure
 
@@ -165,19 +157,25 @@ Controller/                         # iOS/macOS SwiftUI app
   ContentView.swift                 # iOS controller UI (PS5 layout)
   NetworkService.swift              # ControllerServer (macOS/iPad) + ControllerClient (iPhone)
   ControllerMessage.swift           # Shared Codable message model
-  InputMapper.swift                 # macOS keyboard/mouse emulation
-  ReceiverView.swift                # macOS UI with tab switcher
-  GameView.swift                    # macOS 3D parkour game (SceneKit)
-  DualGameView.swift                # Split-screen co-op platformer (2 players)
-  iPadReceiverView.swift            # iPad receiver (server + game + debug)
-  SoundManager.swift                # Procedural audio engine
+  InputMapper.swift                 # macOS input engine: CGEvents, presets, RT tick thread
+  VirtualMouse.swift                # Client for the virtual HID bridge
+  ReceiverView.swift                # macOS UI (Universal + Debug)
+  GameView.swift / DualGameView.swift  # SceneKit parkour (iPad)
+  iPadReceiverView.swift            # iPad receiver
+  SoundManager.swift                # Procedural audio engine (iPad game)
 
 Controller-Android/                 # Android app (Kotlin + Compose)
   app/src/main/java/com/toby/controller/
     MainActivity.kt                 # Activity + Compose UI + edit mode
-    ControllerSender.kt             # TCP client connecting to Mac/iPad server
+    ControllerSender.kt             # TCP client, 250 Hz send pump, WiFi lock
+    BluetoothHidController.kt       # BT HID gamepad mode (works with any host)
+    BleControllerPeripheral.kt      # BLE link to the iPad receiver
     ControllerMessage.kt            # JSON message model
-    LayoutStore.kt                  # SharedPreferences for layout + server host
+    LayoutStore.kt                  # SharedPreferences for layout + connection settings
+
+tools/vhid-bridge/                  # Root helper for Real mouse mode
+  main.cpp                          # Unix socket → Karabiner virtual HID pointing device
+  build.sh / install.sh             # Build + LaunchDaemon installer
 ```
 
 ## Tech Stack
@@ -185,12 +183,14 @@ Controller-Android/                 # Android app (Kotlin + Compose)
 | Component | Technology |
 |-----------|-----------|
 | iOS/macOS UI | SwiftUI |
-| 3D Game | SceneKit |
-| Networking | Network.framework (Apple), raw sockets (Android) |
+| Networking | Network.framework (Apple), raw sockets (Android), no-delay TCP |
 | Discovery | Bonjour / NSD (mDNS) |
-| Audio | AVAudioEngine (procedural synthesis) |
+| Bluetooth | BluetoothHidDevice (Android), CoreBluetooth (iPad link) |
+| Virtual mouse | Karabiner DriverKit virtual HID + C++ bridge |
+| Input timing | mach time-constraint (real-time) threads |
 | Android UI | Jetpack Compose + Material3 |
+| 3D Game (iPad) | SceneKit + AVAudioEngine |
 | Build | Xcode / Gradle 8.11.1 |
-| Language | Swift (Apple) / Kotlin 2.1.0 (Android) |
+| Language | Swift / Kotlin 2.1.0 / C++ (bridge) |
 
-No third-party dependencies on the Apple side. Android uses only standard Jetpack libraries.
+No third-party runtime dependencies on the Apple side beyond the optional Karabiner driver. Android uses only standard Jetpack libraries.
