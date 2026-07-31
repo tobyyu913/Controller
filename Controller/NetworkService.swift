@@ -72,6 +72,59 @@ class ControllerServer {
 
     #if os(macOS)
     private var usbTimer: DispatchSourceTimer?
+
+    // USB (ADB reverse tunnel) state, surfaced in the macOS UI
+    var usbEnabled = UserDefaults.standard.object(forKey: "usbEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(usbEnabled, forKey: "usbEnabled")
+            if usbEnabled {
+                DispatchQueue.global(qos: .utility).async { [weak self] in self?.refreshUSB() }
+            } else {
+                usbAdbFound = false
+                usbDeviceSerial = nil
+                usbForwarded = false
+            }
+        }
+    }
+    var usbAdbFound = false
+    var usbDeviceSerial: String?
+    var usbForwarded = false
+    /// When a USB link is live, shut Wi‑Fi out: stop advertising over Bonjour and
+    /// drop/refuse non-loopback clients so only the cable path is used.
+    var usbExclusive = UserDefaults.standard.object(forKey: "usbExclusive") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(usbExclusive, forKey: "usbExclusive")
+            applyUSBExclusivity()
+        }
+    }
+    /// True when a phone is actually connected through the cable (loopback client).
+    var usbLinkActive: Bool {
+        usbEnabled && usbForwarded && connectedClients.contains { Self.isLoopback($0.name) }
+    }
+    var wifiClosed = false
+
+    static func isLoopback(_ host: String) -> Bool {
+        let h = host.split(separator: "%").first.map(String.init) ?? host
+        return h == "127.0.0.1" || h == "::1" || h == "localhost"
+    }
+
+    /// Close Wi‑Fi while the cable is live; reopen it when the cable goes away.
+    private func applyUSBExclusivity() {
+        #if os(macOS)
+        let shouldClose = usbExclusive && usbLinkActive
+        guard shouldClose != wifiClosed else { return }
+        wifiClosed = shouldClose
+
+        if shouldClose {
+            listener?.service = nil // stop Bonjour advertising
+            for client in connectedClients where !Self.isLoopback(client.name) {
+                removeClient(id: client.id)
+            }
+        } else {
+            listener?.service = NWListener.Service(name: "Controller", type: "_ps5ctrl._tcp")
+        }
+        #endif
+    }
     #endif
 
     struct ClientInfo: Identifiable {
@@ -174,10 +227,22 @@ class ControllerServer {
                     default:
                         name = conn.endpoint.debugDescription
                     }
+                    #if os(macOS)
+                    // USB is exclusive while linked: refuse Wi‑Fi clients so input
+                    // can't arrive over both paths at once.
+                    if self.usbExclusive, self.usbLinkActive, !Self.isLoopback(name) {
+                        conn.cancel()
+                        return
+                    }
+                    #endif
                     let client = ClientInfo(id: id, name: name)
                     self.connectedClients.append(client)
                     self.connections[id] = conn
                     self.readFrame(from: conn, clientId: id)
+                    #if os(macOS)
+                    // A cable client just arrived — close Wi‑Fi behind it
+                    self.applyUSBExclusivity()
+                    #endif
                 case .failed, .cancelled:
                     self.removeClient(id: id)
                 default: break
@@ -195,6 +260,10 @@ class ControllerServer {
         if connectedClients.isEmpty {
             latestMessage = nil
         }
+        #if os(macOS)
+        // Cable unplugged / phone left — reopen Wi‑Fi
+        applyUSBExclusivity()
+        #endif
     }
 
     // MARK: - Read Loop
@@ -290,17 +359,35 @@ class ControllerServer {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now(), repeating: 2.0)
         timer.setEventHandler { [weak self] in
-            guard self != nil else { return }
-            Self.setupADBReverse()
+            guard let self, self.usbEnabled else { return }
+            self.refreshUSB()
         }
         timer.resume()
         usbTimer = timer
     }
 
-    private static func setupADBReverse() {
-        guard let adb = findADB() else { return }
-        guard let serial = getUSBDeviceSerial(adb: adb) else { return }
-        shell(adb, args: ["-s", serial, "reverse", "tcp:\(fixedPort)", "tcp:\(fixedPort)"])
+    /// Re-detect ADB + device and (re)apply the reverse tunnel. Safe to call often.
+    func refreshUSB() {
+        guard let adb = Self.findADB() else {
+            publishUSB(adbFound: false, device: nil, forwarded: false)
+            return
+        }
+        guard let serial = Self.getUSBDeviceSerial(adb: adb) else {
+            publishUSB(adbFound: true, device: nil, forwarded: false)
+            return
+        }
+        let ok = Self.shell(adb, args: ["-s", serial, "reverse", "tcp:\(fixedPort)", "tcp:\(fixedPort)"]) != nil
+        publishUSB(adbFound: true, device: serial, forwarded: ok)
+    }
+
+    private func publishUSB(adbFound: Bool, device: String?, forwarded: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.usbAdbFound = adbFound
+            self.usbDeviceSerial = device
+            self.usbForwarded = forwarded
+            self.applyUSBExclusivity()
+        }
     }
 
     private static func findADB() -> String? {

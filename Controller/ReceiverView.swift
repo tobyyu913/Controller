@@ -233,7 +233,13 @@ struct FlowLayout: Layout {
 // MARK: - Universal Mode View
 
 struct UniversalView: View {
-    let server: ControllerServer
+    @Bindable var server: ControllerServer
+
+    private var usbStatusText: String {
+        if !server.usbAdbFound { return "adb not found" }
+        guard let serial = server.usbDeviceSerial else { return "no device" }
+        return server.usbForwarded ? "\(serial) linked" : "\(serial) — link failed"
+    }
     @State private var mapper = InputMapper()
     @State private var sensitivity: Double = 15.0
     @State private var smoothingMs: Double = 30.0
@@ -277,6 +283,45 @@ struct UniversalView: View {
                     .background(.red.opacity(0.12))
                     .cornerRadius(8)
                 }
+
+                Divider()
+
+                // Connection: WiFi is always listening; USB adds an ADB reverse tunnel
+                HStack(spacing: 10) {
+                    Text("Connection")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+
+                    Text(server.wifiClosed ? "Wi‑Fi closed (USB active)" : "Wi‑Fi \(server.getLocalIP()):9876")
+                        .font(.system(size: 11, design: .monospaced))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(server.wifiClosed ? .gray.opacity(0.15) : .green.opacity(0.12))
+                        .foregroundStyle(server.wifiClosed ? Color.secondary : Color.green)
+                        .cornerRadius(5)
+
+                    Toggle("USB cable", isOn: $server.usbEnabled)
+                        .toggleStyle(.switch)
+
+                    if server.usbEnabled {
+                        Text(usbStatusText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(server.usbForwarded ? .green : .secondary)
+                        Button("Reconnect") {
+                            DispatchQueue.global(qos: .userInitiated).async { server.refreshUSB() }
+                        }
+                        .controlSize(.small)
+                    }
+                    Spacer()
+                }
+                if server.usbEnabled {
+                    Toggle("Close Wi‑Fi automatically while USB is connected", isOn: $server.usbExclusive)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11))
+                }
+                Text(server.usbEnabled
+                     ? "Plug the phone in and pick USB on it. The tunnel is re-applied automatically every 2s."
+                     : "USB tunnelling is off — the phone can still connect over Wi‑Fi.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
 
                 Divider()
 
