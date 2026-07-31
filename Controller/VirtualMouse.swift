@@ -98,19 +98,26 @@ final class VirtualMouse {
         isReady = false
     }
 
+    /// Fixed 4-byte record: [sync 0xA5][buttons][int8 dx][int8 dy].
+    /// Preallocated so the real-time tick thread never allocates — a malloc here
+    /// can block, overrun the thread's deadline and get it demoted (= jitter).
+    private var packet: [UInt8] = [0xA5, 0, 0, 0]
+
     /// buttons: bit0 = left, bit1 = right, bit2 = middle
     func send(buttons: Int, dx: Int, dy: Int) {
         lock.lock()
         defer { lock.unlock() }
         guard fd >= 0 else { return }
 
-        let line = "p \(buttons) \(dx) \(dy)\n"
-        let ok = line.withCString { cstr -> Bool in
-            let len = strlen(cstr)
-            let written = write(fd, cstr, len)
+        packet[1] = UInt8(buttons & 0xFF)
+        packet[2] = UInt8(bitPattern: Int8(clamping: dx))
+        packet[3] = UInt8(bitPattern: Int8(clamping: dy))
+
+        let ok = packet.withUnsafeBytes { raw -> Bool in
+            let written = write(fd, raw.baseAddress, 4)
             if written < 0 {
-                // EAGAIN on a full buffer is fine — dropping one 8ms sample is
-                // better than stalling; any other error means the helper died.
+                // EAGAIN on a full buffer is fine — dropping one sample beats
+                // stalling; any other error means the helper died.
                 return errno == EAGAIN || errno == EWOULDBLOCK
             }
             return true

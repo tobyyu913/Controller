@@ -111,35 +111,34 @@ int main() {
     client_fd = fd;
     report_ready(pointing_ready);
 
-    std::string buffer;
-    char chunk[512];
+    // Fixed 4-byte records: [sync 0xA5][buttons][int8 dx][int8 dy].
+    // Binary + fixed width keeps the app's real-time thread allocation-free.
+    uint8_t chunk[4096];
+    uint8_t rec[4];
+    size_t have = 0;
     while (!exit_flag) {
       ssize_t n = ::read(fd, chunk, sizeof(chunk));
       if (n <= 0) break;
-      buffer.append(chunk, static_cast<size_t>(n));
 
-      size_t pos;
-      while ((pos = buffer.find('\n')) != std::string::npos) {
-        std::string line = buffer.substr(0, pos);
-        buffer.erase(0, pos + 1);
+      for (ssize_t i = 0; i < n; ++i) {
+        if (have == 0 && chunk[i] != 0xA5) continue; // resync
+        rec[have++] = chunk[i];
+        if (have < 4) continue;
+        have = 0;
 
-        int buttons = 0, dx = 0, dy = 0;
-        if (std::sscanf(line.c_str(), "p %d %d %d", &buttons, &dx, &dy) == 3) {
-          if (!pointing_ready) continue;
+        if (!pointing_ready) continue;
 
-          pqrs::karabiner::driverkit::virtual_hid_device_driver::hid_report::pointing_input report;
-          if (buttons & 1) report.buttons.insert(1); // left
-          if (buttons & 2) report.buttons.insert(2); // right
-          if (buttons & 4) report.buttons.insert(3); // middle
-          dx = std::max(-127, std::min(127, dx));
-          dy = std::max(-127, std::min(127, dy));
-          report.x = static_cast<uint8_t>(static_cast<int8_t>(dx));
-          report.y = static_cast<uint8_t>(static_cast<int8_t>(dy));
+        pqrs::karabiner::driverkit::virtual_hid_device_driver::hid_report::pointing_input report;
+        uint8_t buttons = rec[1];
+        if (buttons & 1) report.buttons.insert(1); // left
+        if (buttons & 2) report.buttons.insert(2); // right
+        if (buttons & 4) report.buttons.insert(3); // middle
+        report.x = rec[2];
+        report.y = rec[3];
 
-          std::lock_guard<std::mutex> lock(client_mutex);
-          if (client) {
-            client->async_post_report(report);
-          }
+        std::lock_guard<std::mutex> lock(client_mutex);
+        if (client) {
+          client->async_post_report(report);
         }
       }
     }

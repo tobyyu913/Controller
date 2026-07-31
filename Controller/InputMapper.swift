@@ -393,11 +393,15 @@ class InputMapper {
         let heldRight = pressedKeys.contains(MouseCode.right)
         lock.unlock()
 
-        // The tick thread runs at 1000 Hz for the HID path; CGEvents are posted at
-        // 125 Hz (flooding the event system does not help and costs CPU).
+        // Tick thread runs at 1000 Hz. HID reports go out at 500 Hz (a real mouse's
+        // rate; 1000 Hz doubled IPC cost for no gain), CGEvents at 125 Hz.
         let hidPath = virtualMouseMode
         tickCount += 1
-        if !hidPath && tickCount % 8 != 0 { return }
+        if hidPath {
+            if tickCount % 2 != 0 { return }
+        } else if tickCount % 8 != 0 {
+            return
+        }
 
         // Query the window system RARELY (every ~200ms), never per tick: synchronous
         // queries stall randomly while the GPU is loaded, clumping our event stream.
@@ -422,7 +426,7 @@ class InputMapper {
         // steps straight through makes velocity jump every packet. Ease the stick
         // value toward its target with a time constant instead: the camera keeps
         // moving smoothly between samples and gaps stop being visible.
-        let dt = hidPath ? 0.001 : 0.008
+        let dt = hidPath ? 0.002 : 0.008
         let tau = max(0.001, mapping.smoothing)
         let alpha = 1 - exp(-dt / tau)
         smoothX += (rx - smoothX) * alpha
@@ -439,26 +443,28 @@ class InputMapper {
 
         // Sensitivity is calibrated as pixels per 1/60s frame; convert to this tick's
         // share. Fractional remainders carry over so slow pans don't quantize.
-        let perTick = mapping.mouseSensitivity * 60.0 / (hidPath ? 1000.0 : 125.0)
+        let perTick = mapping.mouseSensitivity * 60.0 / (hidPath ? 500.0 : 125.0)
         carryX += smoothX * perTick
         carryY += smoothY * perTick
         let ix = Int64(carryX.rounded())
         let iy = Int64(carryY.rounded())
         carryX -= Double(ix)
         carryY -= Double(iy)
-        if ix != 0 || iy != 0 {
-            if virtualMouseMode {
-                lock.lock()
-                let heldMiddle = pressedKeys.contains(MouseCode.middle)
-                lock.unlock()
-                var btns = 0
-                if heldLeft { btns |= 1 }
-                if heldRight { btns |= 2 }
-                if heldMiddle { btns |= 4 }
-                VirtualMouse.shared.send(buttons: btns, dx: Int(ix), dy: Int(iy))
-            } else {
-                moveMouse(ix: ix, iy: iy, heldLeft: heldLeft, heldRight: heldRight)
-            }
+
+        if hidPath {
+            // Constant cadence, including zero-motion reports — that is what a real
+            // mouse does, and macOS derives pointer velocity from report timing, so
+            // an irregular stream reads as jitter.
+            lock.lock()
+            let heldMiddle = pressedKeys.contains(MouseCode.middle)
+            lock.unlock()
+            var btns = 0
+            if heldLeft { btns |= 1 }
+            if heldRight { btns |= 2 }
+            if heldMiddle { btns |= 4 }
+            VirtualMouse.shared.send(buttons: btns, dx: Int(ix), dy: Int(iy))
+        } else if ix != 0 || iy != 0 {
+            moveMouse(ix: ix, iy: iy, heldLeft: heldLeft, heldRight: heldRight)
         }
     }
 
