@@ -163,7 +163,10 @@ class ControllerSender(private val context: Context) {
                     return
                 }
             }
-            delay(8) // ~120 Hz
+            // 250 Hz: matches the touch digitizer's sampling rate, so no sample
+            // waits on the pump. Cheap over USB, and fine over WiFi with Nagle
+            // off and the radio held in low-latency mode.
+            delay(4)
         }
     }
 

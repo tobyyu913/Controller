@@ -607,6 +607,16 @@ fun AnalogStick(
             .then(
                 if (!editing) Modifier.pointerInput(Unit) {
                     detectDragGestures(
+                        onDragStart = {
+                            // Android batches touch samples to the display refresh by
+                            // default, so thumb motion arrives in frame-sized clumps.
+                            // Opt out for this gesture to get raw, full-rate samples.
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                try {
+                                    view.requestUnbufferedDispatch(android.view.InputDevice.SOURCE_TOUCHSCREEN)
+                                } catch (_: Exception) {}
+                            }
+                        },
                         onDragEnd = {
                             onOffsetChange(Offset.Zero, thumbVisualOffset)
                             wasAtEdge = false
