@@ -4,6 +4,13 @@ Turn your phone into a PS5-style game controller for your Mac — over USB or Wi
 
 A cross-platform system with native apps for **Android** (Kotlin/Compose), **iOS** (SwiftUI), and **macOS** (SwiftUI/SceneKit). The Mac runs a server, phones connect as clients, and controller input streams in real time. Includes a split-screen co-op platformer for two players.
 
+## Download
+
+- **[Controller.dmg](../../releases/latest)** — the macOS app, with the Virtual Mouse Helper bundled inside.
+- For **Real mouse mode** (camera input as genuine mouse hardware — needed for games that ignore synthetic input, e.g. Wuthering Waves), also install the
+  **[Karabiner virtual HID driver](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases)** (.pkg), approve it under
+  System Settings → General → Login Items & Extensions → Driver Extensions, then run `sudo ./install.sh` from the *Virtual Mouse Helper* folder in the DMG.
+
 ## How It Works
 
 ```
