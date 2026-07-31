@@ -450,7 +450,7 @@ struct UniversalView: View {
                 HStack {
                     Text("Mouse Sensitivity")
                         .font(.system(size: 12, design: .monospaced))
-                    Slider(value: $sensitivity, in: 2...50, step: 1)
+                    Slider(value: $sensitivity, in: 2...150, step: 1)
                         .frame(width: 200)
                         .onChange(of: sensitivity) {
                             mapper.mapping.mouseSensitivity = sensitivity
