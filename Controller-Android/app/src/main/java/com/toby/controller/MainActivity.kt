@@ -36,6 +36,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -88,9 +89,9 @@ class MainActivity : ComponentActivity() {
 
         val layoutStore = LayoutStore(this)
         // v6: DualSense proportions (touchpad, face buttons, d-pad) — reset once
-        if (layoutStore.getLayoutVersion() < 6) {
+        if (layoutStore.getLayoutVersion() < 7) {
             layoutStore.clearLayout()
-            layoutStore.setLayoutVersion(6)
+            layoutStore.setLayoutVersion(7)
         }
         sender = ControllerSender(this)
         btController = BluetoothHidController(this, layoutStore)
@@ -226,7 +227,7 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     val faceS = 132f * d
     val stickS = 174f * d  // stick (130) + 22dp band each side — constant in every stick-click mode
     val padW = 200f * d; val padH = 96f * d
-    val pillW = 34f * d
+    val pillW = 13f * d
     val psS = 34f * d
     val m = 12f * d          // screen edge margin
     val gap = 8f * d
@@ -249,9 +250,9 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
         faceButtons = Offset(min(screenW - m - faceS, 0.84f * screenW - faceS / 2), 0.44f * screenH - faceS / 2),
         leftStick = Offset(0.35f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
         rightStick = Offset(0.65f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
-        create = Offset(screenW / 2 - padW / 2 - gap - pillW, 0.14f * screenH + 8f * d),
+        create = Offset(screenW / 2 - padW / 2 - 20f * d - pillW, 0.14f * screenH + padH / 2 - 26f * d),
         touchpad = Offset(screenW / 2 - padW / 2, 0.14f * screenH),
-        options = Offset(screenW / 2 + padW / 2 + gap, 0.14f * screenH + 8f * d),
+        options = Offset(screenW / 2 + padW / 2 + 20f * d, 0.14f * screenH + padH / 2 - 26f * d),
         ps = Offset(screenW / 2 - psS / 2, 0.66f * screenH - psS / 2),
         // DualSense mute button: just under the touchpad
         mute = Offset(screenW / 2 - 14f * d, 0.14f * screenH + padH + 6f * d),
@@ -487,13 +488,13 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             )
         }
         DraggableElement("create", layoutStore, editing, defaults.create) {
-            SystemGlyphButton("Create", state, inputDisabled)
+            SystemGlyphButton("Create", state, inputDisabled, lean = -10f)
         }
         DraggableElement("touchpad", layoutStore, editing, defaults.touchpad) {
             Touchpad(state, inputDisabled)
         }
         DraggableElement("options", layoutStore, editing, defaults.options) {
-            SystemGlyphButton("Options", state, inputDisabled)
+            SystemGlyphButton("Options", state, inputDisabled, lean = 10f)
         }
         DraggableElement("ps", layoutStore, editing, defaults.ps) {
             PSButton(state, inputDisabled)
@@ -982,16 +983,17 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
             else -> 0.12f
         }
         Row(
-            modifier = Modifier.width(216.dp).height(96.dp),
+            modifier = Modifier.width(212.dp).height(96.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            repeat(2) {
+            listOf(-10f, 10f).forEach { lean ->
                 Box(
                     modifier = Modifier
-                        .width(5.dp)
-                        .height(70.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .rotate(lean)
+                        .width(4.dp)
+                        .height(80.dp)
+                        .clip(RoundedCornerShape(2.dp))
                         .background(t.ledColor.copy(barAlpha))
                 )
             }
@@ -1073,40 +1075,25 @@ fun MuteButton(state: ControllerState, editing: Boolean = false) {
  * Create is the capture glyph (a frame with a segmented left edge).
  */
 @Composable
-fun SystemGlyphButton(label: String, state: ControllerState, editing: Boolean = false) {
+fun SystemGlyphButton(label: String, state: ControllerState, editing: Boolean = false, lean: Float = 0f) {
     val pressed = !editing && state.isPressed(label)
     val view = LocalView.current
     val t = LocalControllerTheme.current
-    val glyph = if (pressed) t.text else t.textDim
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .width(34.dp)
-            .height(24.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
-            .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(6.dp))
-            .then(
-                if (!editing) Modifier.pointerInput(label) {
-                    detectTapGestures(
-                        onPress = {
-                            state.press(label)
-                            vibrateLight(view)
-                            tryAwaitRelease()
-                            state.release(label)
-                        }
-                    )
-                } else Modifier
-            )
+    val glyph = if (pressed) t.text else t.onBody
+
+    // Like the real pad: the icon is printed ABOVE the button, and the button
+    // itself is a plain vertical pill leaning slightly inward.
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Canvas(modifier = Modifier.size(16.dp, 12.dp)) {
+        Canvas(modifier = Modifier.size(13.dp, 10.dp)) {
             val w = size.width
             val h = size.height
-            val stroke = h * 0.14f
+            val stroke = h * 0.13f
             if (label == "Options") {
-                // Three horizontal lines
                 for (i in 0..2) {
-                    val y = h * (0.22f + 0.28f * i)
+                    val y = h * (0.2f + 0.3f * i)
                     drawLine(
                         color = glyph,
                         start = Offset(0f, y),
@@ -1116,25 +1103,43 @@ fun SystemGlyphButton(label: String, state: ControllerState, editing: Boolean = 
                     )
                 }
             } else {
-                // Create: a frame whose left edge is split into segments
-                drawRect(
-                    color = glyph,
-                    topLeft = Offset(w * 0.28f, 0f),
-                    size = androidx.compose.ui.geometry.Size(w * 0.72f, h),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
-                )
-                for (i in 0..1) {
-                    val y = h * (0.28f + 0.42f * i)
+                // Create: three short rays fanning upward
+                val cx = w / 2f
+                listOf(-38f, 0f, 38f).forEach { deg ->
+                    val rad = Math.toRadians(deg.toDouble())
+                    val dx = sin(rad).toFloat()
+                    val dy = -cos(rad).toFloat()
                     drawLine(
                         color = glyph,
-                        start = Offset(0f, y),
-                        end = Offset(w * 0.16f, y),
+                        start = Offset(cx + dx * h * 0.28f, h * 0.85f + dy * h * 0.28f),
+                        end = Offset(cx + dx * h * 0.85f, h * 0.85f + dy * h * 0.85f),
                         strokeWidth = stroke,
                         cap = androidx.compose.ui.graphics.StrokeCap.Round
                     )
                 }
             }
         }
+        Box(
+            modifier = Modifier
+                .rotate(lean)
+                .width(13.dp)
+                .height(34.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(if (pressed) t.buttonFillPressed else t.buttonFill)
+                .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(7.dp))
+                .then(
+                    if (!editing) Modifier.pointerInput(label) {
+                        detectTapGestures(
+                            onPress = {
+                                state.press(label)
+                                vibrateLight(view)
+                                tryAwaitRelease()
+                                state.release(label)
+                            }
+                        )
+                    } else Modifier
+                )
+        )
     }
 }
 
