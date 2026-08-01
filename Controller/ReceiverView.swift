@@ -48,8 +48,9 @@ struct ReceiverView: View {
                 HStack(alignment: .top, spacing: 40) {
                     // Left side
                     VStack(alignment: .leading, spacing: 12) {
-                        stickDisplay(label: "L Stick", x: msg.leftStickX, y: msg.leftStickY)
-                        buttonGroup(title: "Triggers", buttons: ["L1", "L2"], pressed: msg.pressedButtons)
+                        stickDisplay(label: "L Stick", x: msg.leftStickX, y: msg.leftStickY,
+                                     clicked: msg.pressedButtons.contains("L3"))
+                        buttonGroup(title: "Triggers", buttons: ["L1", "L2", "L3"], pressed: msg.pressedButtons)
                         buttonGroup(title: "D-Pad", buttons: ["DPadUp", "DPadDown", "DPadLeft", "DPadRight"], pressed: msg.pressedButtons)
                     }
 
@@ -61,8 +62,9 @@ struct ReceiverView: View {
 
                     // Right side
                     VStack(alignment: .leading, spacing: 12) {
-                        stickDisplay(label: "R Stick", x: msg.rightStickX, y: msg.rightStickY)
-                        buttonGroup(title: "Triggers", buttons: ["R1", "R2"], pressed: msg.pressedButtons)
+                        stickDisplay(label: "R Stick", x: msg.rightStickX, y: msg.rightStickY,
+                                     clicked: msg.pressedButtons.contains("R3"))
+                        buttonGroup(title: "Triggers", buttons: ["R1", "R2", "R3"], pressed: msg.pressedButtons)
                         buttonGroup(title: "Face", buttons: ["Triangle", "Circle", "Cross", "Square"], pressed: msg.pressedButtons)
                     }
                 }
@@ -92,12 +94,13 @@ struct ReceiverView: View {
 
     // MARK: - Sub-views
 
-    private func stickDisplay(label: String, x: Double, y: Double) -> some View {
+    private func stickDisplay(label: String, x: Double, y: Double, clicked: Bool = false) -> some View {
         VStack(spacing: 4) {
             Text(label).font(.caption.bold())
             ZStack {
+                // Ring lights up when the stick is clicked (L3/R3)
                 Circle()
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    .stroke(clicked ? Color.blue : Color.gray.opacity(0.3), lineWidth: clicked ? 3 : 1)
                     .frame(width: 60, height: 60)
                 // Crosshair
                 Path { path in
