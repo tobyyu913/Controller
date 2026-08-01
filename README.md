@@ -37,7 +37,11 @@ Four ways to connect:
 ## Features
 
 ### Phone Controller (Android & iOS)
-- Full PS5 DualSense layout, positioned to match the real controller's geometry
+- Full PS5 DualSense layout, positioned and proportioned to match the real controller
+- **Themes** — DualSense (Midnight Black shell, blue light bar down the touchpad's slanted sides, PS5 face buttons, glyphs printed above the Create/Options pills), plus Minimal, Neon and Stealth
+- **Light bar states** — hairline blue when connected, dim pulse while connecting; a white player-indicator strip under the touchpad flashes while connecting and stays lit once linked
+- **Wallpapers** — five built-in gradients or your own photo, independent of the theme
+- **Stick click (L3/R3)** — Off, Button (curved arc on the stick's inner side) or Ring (full ring plus push-past-the-edge click)
 - **Edit Mode** — drag any button/stick to a custom position; persists across restarts
 - **Bluetooth Gamepad mode** (Android) — the phone becomes a genuine BT HID gamepad: standard hat-switch D-Pad, 14 buttons, dual analog sticks; pairs with any host from its Bluetooth settings
 - Unbuffered touch dispatch + 250 Hz send pump — stick input isn't quantized to the display refresh
@@ -58,6 +62,17 @@ Four ways to connect:
 ### iPad Receiver
 - Runs the same server as macOS — phones connect to the iPad too
 - Includes a SceneKit parkour game and debug view
+
+## Known issues
+
+- **The right stick still feels slightly glitchy in some games.** The input path
+  has been rebuilt end to end — real-time scheduling, 500 Hz virtual HID
+  reports, no allocations in the hot loop, unbuffered touch sampling, ordered
+  low-latency networking — and the packet stream measures clean (p50 ~8ms).
+  A real mouse is perfectly smooth in the same game, so what remains appears to
+  be how the game itself paces non-hardware pointer input rather than anything
+  measurable in this pipeline. **Camera Smoothing** in the Universal tab trades
+  responsiveness for steadiness; USB is the smoothest transport.
 
 ## Requirements
 
