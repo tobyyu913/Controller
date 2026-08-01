@@ -10,6 +10,7 @@ import android.os.VibratorManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -253,7 +254,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     var connectionMode by remember { mutableStateOf(layoutStore.getConnectionMode()) }
     var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
     var layoutTick by remember { mutableStateOf(0) }
-    var stickClick by remember { mutableStateOf(layoutStore.getStickClickEnabled()) }
+    var stickClick by remember { mutableStateOf(layoutStore.getStickClickMode()) }
 
     // Sync state from whichever controller is active
     fun syncState() {
@@ -411,7 +412,8 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 offset = state.leftStick,
                 onOffsetChange = { offset, radius -> state.setLeftStick(offset, radius) },
                 editing = inputDisabled,
-                clickButton = if (stickClick) "L3" else null,
+                clickButton = if (stickClick != "off") "L3" else null,
+                clickStyle = stickClick,
                 state = state,
             )
         }
@@ -420,7 +422,8 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 offset = state.rightStick,
                 onOffsetChange = { offset, radius -> state.setRightStick(offset, radius) },
                 editing = inputDisabled,
-                clickButton = if (stickClick) "R3" else null,
+                clickButton = if (stickClick != "off") "R3" else null,
+                clickStyle = stickClick,
                 state = state,
             )
         }
@@ -478,9 +481,9 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 },
                 onResetLayout = { layoutStore.clearLayout(); layoutTick++ },
                 stickClick = stickClick,
-                onStickClickChange = { on ->
-                    stickClick = on
-                    layoutStore.setStickClickEnabled(on)
+                onStickClickChange = { mode ->
+                    stickClick = mode
+                    layoutStore.setStickClickMode(mode)
                 },
                 onClose = { showSettings = false },
                 btController = btController,
@@ -605,14 +608,19 @@ fun AnalogStick(
     offset: Offset,
     onOffsetChange: (Offset, Float) -> Unit,
     editing: Boolean = false,
-    clickButton: String? = null,   // "L3"/"R3": tappable ring around the stick
+    clickButton: String? = null,   // "L3"/"R3", or null when stick-click is off
+    clickStyle: String = "ring",   // "ring" (full ring + push-through) or "button" (inner arc)
     state: ControllerState? = null,
 ) {
     val density = LocalDensity.current
     val baseSizeDp = 130.dp
     val ringWidthDp = 22.dp
-    // No ring when stick-click is off — the stick keeps its plain footprint
-    val outerSizeDp = if (clickButton != null) baseSizeDp + ringWidthDp * 2 else baseSizeDp
+    val bandDp = if (clickStyle == "ring") ringWidthDp else 26.dp
+    // No extra footprint when stick-click is off
+    val outerSizeDp = if (clickButton != null) baseSizeDp + bandDp * 2 else baseSizeDp
+    val isRing = clickStyle == "ring"
+    // The arc button sits on the inner side (toward the screen centre)
+    val innerIsRight = clickButton == "L3"
     val thumbSizeDp = 56.dp
     val thumbVisualOffset = with(density) { ((baseSizeDp - thumbSizeDp) / 2).toPx() }
     val view = LocalView.current
@@ -629,7 +637,7 @@ fun AnalogStick(
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(outerSizeDp)) {
         // L3/R3 ring — a touch screen can't feel a stick press-in, so the ring
         // around the stick stands in for clicking it
-        if (clickButton != null) {
+        if (clickButton != null && isRing) {
             Box(
                 modifier = Modifier
                     .matchParentSize()
@@ -658,6 +666,54 @@ fun AnalogStick(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp)
             )
+        } else if (clickButton != null) {
+            // Curved button hugging the stick on its inner side
+            val arcColor = if (ringPressed) Color(0xFF4488FF) else Color.White.copy(0.3f)
+            val strokePx = with(density) { 15.dp.toPx() }
+            Canvas(modifier = Modifier.matchParentSize()) {
+                val r = (size.minDimension - strokePx) / 2f
+                drawArc(
+                    color = arcColor,
+                    startAngle = if (innerIsRight) -34f else 146f,
+                    sweepAngle = 68f,
+                    useCenter = false,
+                    topLeft = Offset(size.width / 2f - r, size.height / 2f - r),
+                    size = androidx.compose.ui.geometry.Size(r * 2, r * 2),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = strokePx,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                )
+            }
+            // Hit area confined to the arc's side so it can't swallow stray taps
+            Box(
+                modifier = Modifier
+                    .align(if (innerIsRight) Alignment.CenterEnd else Alignment.CenterStart)
+                    .width(bandDp + 12.dp)
+                    .height(baseSizeDp * 0.62f)
+                    .then(
+                        if (!editing && state != null) {
+                            Modifier.pointerInput(clickButton) {
+                                detectTapGestures(
+                                    onPress = {
+                                        state.press(clickButton)
+                                        vibrateHeavy(view)
+                                        tryAwaitRelease()
+                                        state.release(clickButton)
+                                    }
+                                )
+                            }
+                        } else Modifier
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    clickButton,
+                    color = if (ringPressed) Color.White else Color.Gray.copy(0.85f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         // Stick base (drawn on top: its touches never reach the ring)
@@ -713,8 +769,8 @@ fun AnalogStick(
                         }
                         wasAtEdge = atEdge
 
-                        // Push-through click: keep pushing well past the edge -> L3/R3
-                        if (clickButton != null && state != null) {
+                        // Push-through click (ring mode only): push past the edge -> L3/R3
+                        if (clickButton != null && isRing && state != null) {
                             if (!ringEngaged && dist > pressRadius) {
                                 ringEngaged = true
                                 state.press(clickButton)
@@ -904,8 +960,8 @@ fun SettingsOverlay(
     onClose: () -> Unit,
     btController: BluetoothHidController,
     onMakeDiscoverable: () -> Unit,
-    stickClick: Boolean,
-    onStickClickChange: (Boolean) -> Unit,
+    stickClick: String,
+    onStickClickChange: (String) -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -1056,38 +1112,29 @@ fun SettingsOverlay(
 
             // -- Controls --
             Text("Controls", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .pointerInput("stickClick") {
-                        detectTapGestures { onStickClickChange(!stickClick) }
-                    }
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Stick click (L3/R3)", color = Color.White, fontSize = 13.sp)
-                    Text(
-                        "Ring around each stick — tap it, or push the stick past its edge",
-                        color = Color.Gray, fontSize = 9.sp
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .width(44.dp)
-                        .height(24.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (stickClick) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.12f)),
-                    contentAlignment = if (stickClick) Alignment.CenterEnd else Alignment.CenterStart
-                ) {
+            Text("Stick click (L3/R3)", color = Color.White, fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("off" to "Off", "button" to "Button", "ring" to "Ring").forEach { (mode, label) ->
                     Box(
                         modifier = Modifier
-                            .padding(2.dp)
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(if (stickClick) 0.95f else 0.5f))
-                    )
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (stickClick == mode) Color(0xFF4488FF).copy(0.25f) else Color.White.copy(0.06f))
+                            .border(1.dp, if (stickClick == mode) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.1f), RoundedCornerShape(8.dp))
+                            .pointerInput(mode) { detectTapGestures { onStickClickChange(mode) } }
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(label, color = if (stickClick == mode) Color(0xFF4488FF) else Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
+            Text(
+                when (stickClick) {
+                    "off" -> "No stick click."
+                    "button" -> "A curved button on the inner side of each stick."
+                    else -> "A ring around each stick — tap it, or push the stick past its edge."
+                },
+                color = Color.Gray, fontSize = 9.sp
+            )
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
 

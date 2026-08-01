@@ -68,13 +68,15 @@ class LayoutStore(context: Context) {
         return prefs.getString("server_host", "") ?: ""
     }
 
-    /** Whether the L3/R3 rings around the sticks exist at all. */
-    fun setStickClickEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("stick_click_enabled", enabled).apply()
+    /** L3/R3 style: "off", "button" (inner arc) or "ring" (full ring + push-through). */
+    fun setStickClickMode(mode: String) {
+        prefs.edit().putString("stick_click_mode", mode).apply()
     }
 
-    fun getStickClickEnabled(): Boolean {
-        return prefs.getBoolean("stick_click_enabled", true)
+    fun getStickClickMode(): String {
+        prefs.getString("stick_click_mode", null)?.let { return it }
+        // Migrate the old on/off switch
+        return if (prefs.getBoolean("stick_click_enabled", true)) "ring" else "off"
     }
 
     fun setLastBtHost(address: String) {
