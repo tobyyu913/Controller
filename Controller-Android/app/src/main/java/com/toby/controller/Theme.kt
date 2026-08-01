@@ -52,7 +52,7 @@ object Themes {
         faceGlyphOnly = true,
         stickBase = Color(0xFF1B1C20),
         stickThumb = Color(0xFF34363C),
-        ledColor = Color(0xFFFF8A1F),           // amber light bar when connected
+        ledColor = Color(0xFF1E5FE8),           // PlayStation blue light bar
         showMute = false,
     )
 
