@@ -592,8 +592,11 @@ struct UniversalView: View {
             // Direct network→mapper hot path, bypassing SwiftUI entirely
             let m = mapper
             server.onMessage = { msg in m.process(msg) }
-            // Restore Enable across launches (only if permission is still there)
-            if UserDefaults.standard.bool(forKey: "mappingEnabled"), axTrusted, !mapper.isEnabled {
+            // Enable by default on launch (the app's whole point is mapping);
+            // stays off only if the user explicitly turned it off last time.
+            // Requires Accessibility, else the red banner explains instead.
+            let wantEnabled = UserDefaults.standard.object(forKey: "mappingEnabled") as? Bool ?? true
+            if wantEnabled, axTrusted, !mapper.isEnabled {
                 mapper.isEnabled = true
             }
             // Prime the HID badge immediately instead of waiting for the 2s timer
