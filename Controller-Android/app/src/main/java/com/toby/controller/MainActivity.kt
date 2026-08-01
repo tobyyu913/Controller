@@ -10,8 +10,13 @@ import android.os.VibratorManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
@@ -204,6 +209,7 @@ data class DefaultPositions(
     val touchpad: Offset,
     val options: Offset,
     val ps: Offset,
+    val mute: Offset,
 )
 
 fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions {
@@ -241,6 +247,8 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
         touchpad = Offset(screenW / 2 - padW / 2, 0.14f * screenH),
         options = Offset(screenW / 2 + padW / 2 + gap, 0.14f * screenH + 8f * d),
         ps = Offset(screenW / 2 - psS / 2, 0.66f * screenH - psS / 2),
+        // DualSense mute button: just under the touchpad
+        mute = Offset(screenW / 2 - 14f * d, 0.14f * screenH + padH + 6f * d),
     )
 }
 
@@ -258,6 +266,27 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
     var layoutTick by remember { mutableStateOf(0) }
     var stickClick by remember { mutableStateOf(layoutStore.getStickClickMode()) }
+    var themeId by remember { mutableStateOf(layoutStore.getTheme()) }
+    var wallpaperId by remember { mutableStateOf(layoutStore.getWallpaper()) }
+    var wallpaperUri by remember { mutableStateOf(layoutStore.getWallpaperUri()) }
+    val theme = remember(themeId) { Themes.byId(themeId) }
+
+    // Custom backdrop picker (OpenDocument so the grant survives restarts)
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                activity.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+            wallpaperUri = uri.toString()
+            layoutStore.setWallpaperUri(wallpaperUri)
+            wallpaperId = "custom"
+            layoutStore.setWallpaper("custom")
+        }
+    }
 
     // Sync state from whichever controller is active
     fun syncState() {
@@ -315,12 +344,30 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     val screenH = with(density) { config.screenHeightDp.dp.toPx() }
     val defaults = remember(screenW, screenH, density) { computeDefaults(screenW, screenH, density.density) }
 
+    CompositionLocalProvider(LocalControllerTheme provides theme) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .systemBarsPadding()
     ) {
+        // Backdrop: user image, built-in gradient, or plain black
+        if (wallpaperId == "custom" && wallpaperUri.isNotEmpty()) {
+            val bmp = remember(wallpaperUri) { loadBitmap(activity, wallpaperUri) }
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+            }
+        } else {
+            Wallpapers.byId(wallpaperId).brush?.let { brush ->
+                Box(modifier = Modifier.matchParentSize().background(brush))
+            }
+        }
+
         // Connection status
         Row(
             modifier = Modifier
@@ -442,6 +489,11 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         DraggableElement("ps", layoutStore, editing, defaults.ps) {
             PSButton(state, inputDisabled)
         }
+        if (theme.showMute) {
+            DraggableElement("mute", layoutStore, editing, defaults.mute) {
+                MuteButton(state, inputDisabled)
+            }
+        }
         }
 
         // Settings overlay (must be LAST so it draws on top of controls)
@@ -496,9 +548,24 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     }
                     try { activity.startActivity(intent) } catch (_: Exception) {}
                 },
+                themeId = themeId,
+                onThemeChange = { id -> themeId = id; layoutStore.setTheme(id) },
+                wallpaperId = wallpaperId,
+                onWallpaperChange = { id -> wallpaperId = id; layoutStore.setWallpaper(id) },
+                onPickWallpaper = { pickImage.launch(arrayOf("image/*")) },
             )
         }
     }
+    }
+}
+
+/** Load a user-picked backdrop from a persisted content URI. */
+fun loadBitmap(context: android.content.Context, uriString: String): androidx.compose.ui.graphics.ImageBitmap? {
+    return try {
+        context.contentResolver.openInputStream(android.net.Uri.parse(uriString)).use { input ->
+            android.graphics.BitmapFactory.decodeStream(input)?.asImageBitmap()
+        }
+    } catch (_: Exception) { null }
 }
 
 // -- D-Pad --
@@ -511,7 +578,7 @@ fun DPad(state: ControllerState, editing: Boolean = false) {
             modifier = Modifier
                 .size(20.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.05f))
+                .background(LocalControllerTheme.current.buttonFill)
         )
         Box(modifier = Modifier.offset(y = -btnSize)) {
             DPadBtn("\u25B2", "DPadUp", state, editing)
@@ -532,12 +599,13 @@ fun DPad(state: ControllerState, editing: Boolean = false) {
 fun DPadBtn(symbol: String, name: String, state: ControllerState, editing: Boolean) {
     val pressed = !editing && state.isPressed(name)
     val view = LocalView.current
+    val t = LocalControllerTheme.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(42.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (pressed) Color.White.copy(0.2f) else Color.White.copy(0.06f))
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
             .then(
                 if (!editing) Modifier.pointerInput(name) {
                     detectTapGestures(
@@ -551,7 +619,7 @@ fun DPadBtn(symbol: String, name: String, state: ControllerState, editing: Boole
                 } else Modifier
             )
     ) {
-        Text(symbol, color = if (pressed) Color.White else Color.Gray, fontSize = 16.sp)
+        Text(symbol, color = if (pressed) t.text else t.textDim, fontSize = 16.sp)
     }
 }
 
@@ -580,13 +648,15 @@ fun FaceButtons(state: ControllerState, editing: Boolean = false) {
 fun FaceBtn(symbol: String, name: String, color: Color, state: ControllerState, editing: Boolean) {
     val pressed = !editing && state.isPressed(name)
     val view = LocalView.current
+    val t = LocalControllerTheme.current
+    val ring = if (t.faceGlyphOnly) t.border else color
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(if (pressed) color.copy(0.4f) else Color.White.copy(0.06f))
-            .border(2.dp, color.copy(if (pressed) 1f else 0.5f), CircleShape)
+            .background(if (pressed) color.copy(0.4f) else t.buttonFill)
+            .border(2.dp, if (pressed) (if (t.faceGlyphOnly) t.borderPressed else color) else ring.copy(if (t.faceGlyphOnly) 1f else 0.5f), CircleShape)
             .then(
                 if (!editing) Modifier.pointerInput(name) {
                     detectTapGestures(
@@ -600,7 +670,7 @@ fun FaceBtn(symbol: String, name: String, color: Color, state: ControllerState, 
                 } else Modifier
             )
     ) {
-        Text(symbol, color = if (pressed) Color.White else color, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Text(symbol, color = if (pressed) t.text else color, fontSize = 16.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -628,6 +698,7 @@ fun AnalogStick(
     val thumbSizeDp = 56.dp
     val thumbVisualOffset = with(density) { ((baseSizeDp - thumbSizeDp) / 2).toPx() }
     val view = LocalView.current
+    val t = LocalControllerTheme.current
     var wasAtEdge by remember { mutableStateOf(false) }
 
     // Push-through click: dragging past the stick's edge presses L3/R3,
@@ -646,8 +717,8 @@ fun AnalogStick(
                 modifier = Modifier
                     .matchParentSize()
                     .clip(CircleShape)
-                    .background(if (ringPressed) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.05f))
-                    .border(1.dp, if (ringPressed) Color(0xFF4488FF).copy(0.7f) else Color.White.copy(0.12f), CircleShape)
+                    .background(if (ringPressed) t.accent.copy(0.3f) else t.buttonFill)
+                    .border(1.dp, if (ringPressed) t.accent.copy(0.8f) else t.border, CircleShape)
                     .then(
                         if (!editing && state != null) {
                             Modifier.pointerInput(clickButton) {
@@ -665,14 +736,14 @@ fun AnalogStick(
             )
             Text(
                 clickButton,
-                color = if (ringPressed) Color.White else Color.Gray.copy(0.7f),
+                color = if (ringPressed) t.text else t.textDim,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp)
             )
         } else if (clickButton != null) {
             // Curved button hugging the stick on its inner side
-            val arcColor = if (ringPressed) Color(0xFF4488FF) else Color.White.copy(0.3f)
+            val arcColor = if (ringPressed) t.accent else t.border
             val strokePx = with(density) { 15.dp.toPx() }
             Canvas(modifier = Modifier.matchParentSize()) {
                 val r = (size.minDimension - strokePx) / 2f
@@ -718,8 +789,8 @@ fun AnalogStick(
         modifier = Modifier
             .size(baseSizeDp)
             .clip(CircleShape)
-            .background(Color(0xFF0D0D0D))
-            .border(1.dp, Color.White.copy(0.1f), CircleShape)
+            .background(t.stickBase)
+            .border(1.dp, t.border, CircleShape)
             .then(
                 if (!editing) Modifier.pointerInput(Unit) {
                     detectDragGestures(
@@ -787,8 +858,8 @@ fun AnalogStick(
                 .size(thumbSizeDp)
                 .offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
                 .clip(CircleShape)
-                .background(Color.White.copy(0.15f))
-                .border(1.dp, Color.White.copy(0.2f), CircleShape)
+                .background(t.stickThumb)
+                .border(1.dp, t.border, CircleShape)
         )
         }
 
@@ -797,7 +868,7 @@ fun AnalogStick(
         if (clickButton != null && !isRing) {
             Text(
                 clickButton,
-                color = if (ringPressed) Color.White else Color.Gray.copy(0.85f),
+                color = if (ringPressed) t.text else t.textDim,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
@@ -814,14 +885,15 @@ fun AnalogStick(
 fun TriggerButton(label: String, state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
     val view = LocalView.current
+    val t = LocalControllerTheme.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .width(60.dp)
             .height(34.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(if (pressed) Color.White.copy(0.2f) else Color.White.copy(0.06f))
-            .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(6.dp))
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
+            .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(6.dp))
             .then(
                 if (!editing) Modifier.pointerInput(label) {
                     detectTapGestures(
@@ -835,7 +907,7 @@ fun TriggerButton(label: String, state: ControllerState, editing: Boolean = fals
                 } else Modifier
             )
     ) {
-        Text(label, color = if (pressed) Color.White else Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (pressed) t.text else t.textDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -843,14 +915,15 @@ fun TriggerButton(label: String, state: ControllerState, editing: Boolean = fals
 fun BumperButton(label: String, state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
     val view = LocalView.current
+    val t = LocalControllerTheme.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .width(60.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(if (pressed) Color.White.copy(0.2f) else Color.White.copy(0.06f))
-            .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(4.dp))
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
+            .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(4.dp))
             .then(
                 if (!editing) Modifier.pointerInput(label) {
                     detectTapGestures(
@@ -864,7 +937,7 @@ fun BumperButton(label: String, state: ControllerState, editing: Boolean = false
                 } else Modifier
             )
     ) {
-        Text(label, color = if (pressed) Color.White else Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (pressed) t.text else t.textDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -874,13 +947,33 @@ fun BumperButton(label: String, state: ControllerState, editing: Boolean = false
 fun Touchpad(state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed("Touchpad")
     val view = LocalView.current
+    val t = LocalControllerTheme.current
+    Box(contentAlignment = Alignment.Center) {
+    // DualSense light bar: a glowing strip down each side of the touchpad
+    if (t.ledColor != null) {
+        Row(
+            modifier = Modifier.width(226.dp).height(84.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            repeat(2) {
+                Box(
+                    modifier = Modifier
+                        .width(5.dp)
+                        .height(62.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(t.ledColor.copy(if (pressed) 1f else 0.75f))
+                )
+            }
+        }
+    }
     Box(
         modifier = Modifier
             .width(210.dp)
             .height(84.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(if (pressed) Color.White.copy(0.12f) else Color.White.copy(0.04f))
-            .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(14.dp))
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
+            .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(14.dp))
             .then(
                 if (!editing) Modifier.pointerInput("Touchpad") {
                     detectTapGestures(
@@ -894,6 +987,37 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
                 } else Modifier
             )
     )
+    }
+}
+
+/** DualSense mute/mic button — small round button under the touchpad. */
+@Composable
+fun MuteButton(state: ControllerState, editing: Boolean = false) {
+    val pressed = !editing && state.isPressed("Mute")
+    val view = LocalView.current
+    val t = LocalControllerTheme.current
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
+            .border(1.dp, if (pressed) t.borderPressed else t.border, CircleShape)
+            .then(
+                if (!editing) Modifier.pointerInput("Mute") {
+                    detectTapGestures(
+                        onPress = {
+                            state.press("Mute")
+                            vibrateLight(view)
+                            tryAwaitRelease()
+                            state.release("Mute")
+                        }
+                    )
+                } else Modifier
+            )
+    ) {
+        Text("\u1F3A4".let { "\u25CF" }, color = if (pressed) t.text else t.textDim, fontSize = 9.sp)
+    }
 }
 
 // -- Small Pill Buttons --
@@ -902,13 +1026,14 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
 fun SmallPillButton(label: String, state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
     val view = LocalView.current
+    val t = LocalControllerTheme.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .width(44.dp)
             .height(26.dp)
             .clip(RoundedCornerShape(13.dp))
-            .background(if (pressed) Color.White.copy(0.2f) else Color.White.copy(0.06f))
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
             .then(
                 if (!editing) Modifier.pointerInput(label) {
                     detectTapGestures(
@@ -922,7 +1047,7 @@ fun SmallPillButton(label: String, state: ControllerState, editing: Boolean = fa
                 } else Modifier
             )
     ) {
-        Text(label, color = if (pressed) Color.White else Color.Gray, fontSize = 7.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = if (pressed) t.text else t.textDim, fontSize = 7.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -932,13 +1057,14 @@ fun SmallPillButton(label: String, state: ControllerState, editing: Boolean = fa
 fun PSButton(state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed("PS")
     val view = LocalView.current
+    val t = LocalControllerTheme.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(34.dp)
             .clip(CircleShape)
-            .background(if (pressed) Color(0xFF4488FF).copy(0.4f) else Color.White.copy(0.06f))
-            .border(1.5.dp, Color(0xFF4488FF).copy(if (pressed) 0.8f else 0.3f), CircleShape)
+            .background(if (pressed) t.accent.copy(0.4f) else t.buttonFill)
+            .border(1.5.dp, t.accent.copy(if (pressed) 0.9f else 0.45f), CircleShape)
             .then(
                 if (!editing) Modifier.pointerInput("PS") {
                     detectTapGestures(
@@ -952,7 +1078,7 @@ fun PSButton(state: ControllerState, editing: Boolean = false) {
                 } else Modifier
             )
     ) {
-        Text("PS", color = if (pressed) Color.White else Color(0xFF4488FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text("PS", color = if (pressed) t.text else t.accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -972,6 +1098,11 @@ fun SettingsOverlay(
     onMakeDiscoverable: () -> Unit,
     stickClick: String,
     onStickClickChange: (String) -> Unit,
+    themeId: String,
+    onThemeChange: (String) -> Unit,
+    wallpaperId: String,
+    onWallpaperChange: (String) -> Unit,
+    onPickWallpaper: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -1145,6 +1276,55 @@ fun SettingsOverlay(
                 },
                 color = Color.Gray, fontSize = 9.sp
             )
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
+
+            // -- Appearance --
+            Text("Theme", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Themes.all.forEach { th ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (themeId == th.id) Color(0xFF4488FF).copy(0.25f) else Color.White.copy(0.06f))
+                            .border(1.dp, if (themeId == th.id) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.1f), RoundedCornerShape(8.dp))
+                            .pointerInput(th.id) { detectTapGestures { onThemeChange(th.id) } }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Text(th.label, color = if (themeId == th.id) Color(0xFF4488FF) else Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Text("Wallpaper", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Wallpapers.all.forEach { wp ->
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .then(if (wp.brush != null) Modifier.background(wp.brush) else Modifier.background(Color.Black))
+                            .border(
+                                if (wallpaperId == wp.id) 2.dp else 1.dp,
+                                if (wallpaperId == wp.id) Color(0xFF4488FF) else Color.White.copy(0.15f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .pointerInput(wp.id) { detectTapGestures { onWallpaperChange(wp.id) } }
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (wallpaperId == "custom") Color(0xFF4488FF).copy(0.25f) else Color.White.copy(0.06f))
+                        .border(1.dp, if (wallpaperId == "custom") Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.1f), RoundedCornerShape(8.dp))
+                        .pointerInput("pickwp") { detectTapGestures { onPickWallpaper() } }
+                        .padding(horizontal = 10.dp, vertical = 9.dp)
+                ) {
+                    Text("Photo...", color = if (wallpaperId == "custom") Color(0xFF4488FF) else Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
 

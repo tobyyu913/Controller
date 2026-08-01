@@ -110,6 +110,7 @@ struct ControllerMapping {
         MappingEntry(id: "create", label: "Create", keyCode: CGKeyCode(kVK_Tab)),
         MappingEntry(id: "ps", label: "PS", keyCode: CGKeyCode(kVK_ANSI_P)),
         MappingEntry(id: "touchpad", label: "Touchpad", keyCode: CGKeyCode(kVK_ANSI_M)),
+        MappingEntry(id: "mute", label: "Mute", keyCode: CGKeyCode(kVK_ANSI_N)),
     ]
 
     var mouseSensitivity: Double = 15.0
@@ -281,6 +282,7 @@ private let buttonToMappingId: [String: String] = [
     "L1": "l1", "L2": "l2", "R1": "r1", "R2": "r2",
     "L3": "l3", "R3": "r3",
     "Options": "options", "Create": "create", "PS": "ps", "Touchpad": "touchpad",
+    "Mute": "mute",
 ]
 
 // MARK: - Input Mapper

@@ -79,6 +79,18 @@ class LayoutStore(context: Context) {
         return if (prefs.getBoolean("stick_click_enabled", true)) "ring" else "off"
     }
 
+    // -- Appearance --
+
+    fun setTheme(id: String) = prefs.edit().putString("theme", id).apply()
+    fun getTheme(): String = prefs.getString("theme", "dualsense") ?: "dualsense"
+
+    fun setWallpaper(id: String) = prefs.edit().putString("wallpaper", id).apply()
+    fun getWallpaper(): String = prefs.getString("wallpaper", "black") ?: "black"
+
+    /** Content URI of a user-picked backdrop image, or "" for none. */
+    fun setWallpaperUri(uri: String) = prefs.edit().putString("wallpaper_uri", uri).apply()
+    fun getWallpaperUri(): String = prefs.getString("wallpaper_uri", "") ?: ""
+
     fun setLastBtHost(address: String) {
         prefs.edit().putString("last_bt_host", address).apply()
     }
