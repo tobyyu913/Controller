@@ -235,6 +235,20 @@ struct FlowLayout: Layout {
 struct UniversalView: View {
     @Bindable var server: ControllerServer
 
+    /// Turn mapping on at launch unless the user explicitly disabled it last
+    /// session. Runs until it succeeds — Accessibility may not report as granted
+    /// immediately after launch. Never fights a manual toggle-off.
+    private func autoEnableIfWanted() {
+        // Always on at launch — that is the app's purpose. Retried until
+        // Accessibility resolves (it can read false briefly after launch).
+        // Deliberately NOT persisted: SwiftUI recreating this view fires the
+        // toggle's change handler with a fresh mapper, which recorded phantom
+        // "user turned it off" values and left mapping dead on every launch.
+        guard !didAutoEnable, AXIsProcessTrusted() else { return }
+        didAutoEnable = true
+        if !mapper.isEnabled { mapper.isEnabled = true }
+    }
+
     private var usbStatusText: String {
         if !server.usbAdbFound { return "adb not found" }
         guard let serial = server.usbDeviceSerial else { return "no device" }
@@ -249,6 +263,7 @@ struct UniversalView: View {
     @State private var axTrusted = AXIsProcessTrusted()
     @State private var vhidConnected = false
     @State private var localIP = "…"
+    @State private var didAutoEnable = false
     private let axTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -331,7 +346,6 @@ struct UniversalView: View {
                     Toggle("Enable Keyboard/Mouse Mapping", isOn: $mapper.isEnabled)
                         .toggleStyle(.switch)
                         .onChange(of: mapper.isEnabled) {
-                            UserDefaults.standard.set(mapper.isEnabled, forKey: "mappingEnabled")
                             mapper.updateActivityAssertion()
                             if !mapper.isEnabled {
                                 mapper.releaseAll()
@@ -592,13 +606,7 @@ struct UniversalView: View {
             // Direct network→mapper hot path, bypassing SwiftUI entirely
             let m = mapper
             server.onMessage = { msg in m.process(msg) }
-            // Enable by default on launch (the app's whole point is mapping);
-            // stays off only if the user explicitly turned it off last time.
-            // Requires Accessibility, else the red banner explains instead.
-            let wantEnabled = UserDefaults.standard.object(forKey: "mappingEnabled") as? Bool ?? true
-            if wantEnabled, axTrusted, !mapper.isEnabled {
-                mapper.isEnabled = true
-            }
+            autoEnableIfWanted()
             // Prime the HID badge immediately instead of waiting for the 2s timer
             if mapper.virtualMouseMode {
                 _ = VirtualMouse.shared.connect()
@@ -609,6 +617,10 @@ struct UniversalView: View {
         .onReceive(axTimer) { _ in
             axTrusted = AXIsProcessTrusted()
             localIP = server.getLocalIP()
+            // AXIsProcessTrusted often reads false for a moment after launch
+            // (and right after the app bundle is replaced), so keep trying until
+            // the permission actually resolves.
+            autoEnableIfWanted()
             if mapper.virtualMouseMode {
                 if !VirtualMouse.shared.isConnected { _ = VirtualMouse.shared.connect() }
                 VirtualMouse.shared.pollStatus()
