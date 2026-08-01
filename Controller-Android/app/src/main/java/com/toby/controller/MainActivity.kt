@@ -708,16 +708,8 @@ fun AnalogStick(
                                 )
                             }
                         } else Modifier
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    clickButton,
-                    color = if (ringPressed) Color.White else Color.Gray.copy(0.85f),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                    )
+            )
         }
 
         // Stick base (drawn on top: its touches never reach the ring)
@@ -798,6 +790,20 @@ fun AnalogStick(
                 .background(Color.White.copy(0.15f))
                 .border(1.dp, Color.White.copy(0.2f), CircleShape)
         )
+        }
+
+        // Arc label last, so the stick base can't cover it. Sits to the LEFT of
+        // the arc for both L3 and R3.
+        if (clickButton != null && !isRing) {
+            Text(
+                clickButton,
+                color = if (ringPressed) Color.White else Color.Gray.copy(0.85f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(if (innerIsRight) Alignment.CenterEnd else Alignment.CenterStart)
+                    .offset(x = if (innerIsRight) -(bandDp + 16.dp) else -(bandDp + 2.dp))
+            )
         }
     }
 }
