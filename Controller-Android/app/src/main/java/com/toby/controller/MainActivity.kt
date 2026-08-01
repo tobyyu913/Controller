@@ -226,7 +226,7 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     val dpadS = 126f * d
     val faceS = 132f * d
     val stickS = 174f * d  // stick (130) + 22dp band each side — constant in every stick-click mode
-    val padW = 200f * d; val padH = 96f * d
+    val padW = 214f * d; val padH = 96f * d
     val pillW = 13f * d
     val psS = 34f * d
     val m = 12f * d          // screen edge margin
@@ -974,69 +974,110 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
         ).value
     } else 1f
 
+    val padW = 214.dp       // wide at the top, tapering in toward the bottom
+    val padH = 96.dp
+    // 10 degrees of lean, same angle as the light bars and Create/Options pills:
+    // 96dp * tan(10deg) ~= 17dp of inset per side
+    val taper = 17.dp
+    val corner = 16.dp
+
     Box(contentAlignment = Alignment.Center) {
-    // DualSense light bar: glows amber once the link is up
-    if (t.ledColor != null) {
-        val barAlpha = when {
-            conn.connected -> 1f
-            conn.connecting -> pulse * 0.5f
-            else -> 0.12f
-        }
-        Row(
-            modifier = Modifier.width(212.dp).height(96.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            listOf(-10f, 10f).forEach { lean ->
-                Box(
-                    modifier = Modifier
-                        .rotate(lean)
-                        .width(4.dp)
-                        .height(80.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(t.ledColor.copy(barAlpha))
+        // Light bar: one continuous strip up the left side, across the top and
+        // down the right — it does not close along the bottom.
+        if (t.ledColor != null) {
+            val barAlpha = when {
+                conn.connected -> 1f
+                conn.connecting -> pulse * 0.5f
+                else -> 0.12f
+            }
+            Canvas(modifier = Modifier.size(padW + 22.dp, padH + 16.dp)) {
+                val w = padW.toPx(); val h = padH.toPx()
+                val tp = taper.toPx(); val r = corner.toPx()
+                val cx = size.width / 2f; val cy = size.height / 2f
+                val l = cx - w / 2f - 5.dp.toPx()
+                val rt = cx + w / 2f + 5.dp.toPx()
+                val top = cy - h / 2f - 3.dp.toPx()
+                val bot = cy + h / 2f
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(l + tp, bot)
+                    lineTo(l, top + r)
+                    quadraticBezierTo(l, top, l + r, top)
+                    lineTo(rt - r, top)
+                    quadraticBezierTo(rt, top, rt, top + r)
+                    lineTo(rt - tp, bot)
+                }
+                drawPath(
+                    path = path,
+                    color = t.ledColor.copy(barAlpha),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = 4.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                        join = androidx.compose.ui.graphics.StrokeJoin.Round
+                    )
                 )
             }
         }
-    }
-    Box(
-        modifier = Modifier
-            .width(200.dp)
-            .height(96.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
-            .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(14.dp))
-            .then(
-                if (!editing) Modifier.pointerInput("Touchpad") {
-                    detectTapGestures(
-                        onPress = {
-                            state.press("Touchpad")
-                            vibrateLight(view)
-                            tryAwaitRelease()
-                            state.release("Touchpad")
-                        }
-                    )
-                } else Modifier
-            )
-    )
-    // Player indicator under the touchpad: flashes white while connecting,
-    // stays lit once connected — like a real DualSense
-    if (t.ledColor != null) {
-        val ledAlpha = when {
-            conn.connected -> 0.95f
-            conn.connecting -> pulse
-            else -> 0.12f
-        }
+
+        // Touchpad surface: rounded trapezoid, wider at the top
         Box(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .offset(y = 9.dp)
-                .width(58.dp)
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Color.White.copy(ledAlpha))
-        )
-    }
+                .width(padW)
+                .height(padH)
+                .then(
+                    if (!editing) Modifier.pointerInput("Touchpad") {
+                        detectTapGestures(
+                            onPress = {
+                                state.press("Touchpad")
+                                vibrateLight(view)
+                                tryAwaitRelease()
+                                state.release("Touchpad")
+                            }
+                        )
+                    } else Modifier
+                )
+        ) {
+            Canvas(modifier = Modifier.matchParentSize()) {
+                val w = size.width; val h = size.height
+                val tp = taper.toPx(); val r = corner.toPx()
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(r, 0f)
+                    lineTo(w - r, 0f)
+                    quadraticBezierTo(w, 0f, w - r * 0.35f, r)
+                    lineTo(w - tp, h - r * 0.5f)
+                    quadraticBezierTo(w - tp, h, w - tp - r * 0.5f, h)
+                    lineTo(tp + r * 0.5f, h)
+                    quadraticBezierTo(tp, h, tp, h - r * 0.5f)
+                    lineTo(r * 0.35f, r)
+                    quadraticBezierTo(0f, 0f, r, 0f)
+                    close()
+                }
+                drawPath(path, if (pressed) t.buttonFillPressed else t.buttonFill)
+                drawPath(
+                    path = path,
+                    color = if (pressed) t.borderPressed else t.border,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx())
+                )
+            }
+        }
+
+        // Player indicator under the touchpad: flashes white while connecting,
+        // stays lit once connected — like a real DualSense
+        if (t.ledColor != null) {
+            val ledAlpha = when {
+                conn.connected -> 0.95f
+                conn.connecting -> pulse
+                else -> 0.12f
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset(y = 9.dp)
+                    .width(58.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(ledAlpha))
+            )
+        }
     }
 }
 
