@@ -161,7 +161,10 @@ fun DraggableElement(
     defaultOffset: Offset,
     content: @Composable () -> Unit,
 ) {
-    var pos by remember {
+    // Keyed on defaultOffset: the activity can compose one frame in portrait
+    // before the landscape lock applies, and an unkeyed remember would freeze
+    // every control at those portrait coordinates for the whole session.
+    var pos by remember(key, defaultOffset) {
         mutableStateOf(layoutStore.loadOffset(key) ?: defaultOffset)
     }
 
