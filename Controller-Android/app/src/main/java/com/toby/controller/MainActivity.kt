@@ -212,7 +212,7 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     val bumpW = 60f * d; val bumpH = 28f * d
     val dpadS = 132f * d
     val faceS = 138f * d
-    val stickS = 174f * d  // stick (130) + L3/R3 ring (22 each side)
+    val stickS = 174f * d  // stick (130) + 22dp band each side — constant in every stick-click mode
     val padW = 210f * d; val padH = 84f * d
     val pillW = 44f * d
     val psS = 34f * d
@@ -618,9 +618,10 @@ fun AnalogStick(
     val density = LocalDensity.current
     val baseSizeDp = 130.dp
     val ringWidthDp = 22.dp
-    val bandDp = if (clickStyle == "ring") ringWidthDp else 26.dp
-    // No extra footprint when stick-click is off
-    val outerSizeDp = if (clickButton != null) baseSizeDp + bandDp * 2 else baseSizeDp
+    // Footprint is CONSTANT across off/button/ring so the stick's centre never
+    // shifts when the mode changes (computeDefaults positions it by this size).
+    val bandDp = ringWidthDp
+    val outerSizeDp = baseSizeDp + bandDp * 2
     val isRing = clickStyle == "ring"
     // The arc button sits on the inner side (toward the screen centre)
     val innerIsRight = clickButton == "L3"
