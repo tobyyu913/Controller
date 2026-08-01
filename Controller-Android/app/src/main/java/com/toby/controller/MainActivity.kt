@@ -75,10 +75,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val layoutStore = LayoutStore(this)
-        // v4: shoulders shifted inward for longer fingers — reset saved positions once
-        if (layoutStore.getLayoutVersion() < 4) {
+        // v5: L3/R3 rings around the sticks — reset saved positions once
+        if (layoutStore.getLayoutVersion() < 5) {
             layoutStore.clearLayout()
-            layoutStore.setLayoutVersion(4)
+            layoutStore.setLayoutVersion(5)
         }
         sender = ControllerSender(this)
         btController = BluetoothHidController(this, layoutStore)
@@ -208,7 +208,7 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     val bumpW = 60f * d; val bumpH = 28f * d
     val dpadS = 132f * d
     val faceS = 138f * d
-    val stickS = 130f * d
+    val stickS = 174f * d  // stick (130) + L3/R3 ring (22 each side)
     val padW = 210f * d; val padH = 84f * d
     val pillW = 44f * d
     val psS = 34f * d
@@ -410,6 +410,8 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 offset = state.leftStick,
                 onOffsetChange = { offset, radius -> state.setLeftStick(offset, radius) },
                 editing = inputDisabled,
+                clickButton = "L3",
+                state = state,
             )
         }
         DraggableElement("rstick", layoutStore, editing, defaults.rightStick) {
@@ -417,6 +419,8 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 offset = state.rightStick,
                 onOffsetChange = { offset, radius -> state.setRightStick(offset, radius) },
                 editing = inputDisabled,
+                clickButton = "R3",
+                state = state,
             )
         }
         DraggableElement("create", layoutStore, editing, defaults.create) {
@@ -595,20 +599,67 @@ fun AnalogStick(
     offset: Offset,
     onOffsetChange: (Offset, Float) -> Unit,
     editing: Boolean = false,
+    clickButton: String? = null,   // "L3"/"R3": tappable ring around the stick
+    state: ControllerState? = null,
 ) {
     val density = LocalDensity.current
     val baseSizeDp = 130.dp
+    val ringWidthDp = 22.dp
+    val outerSizeDp = baseSizeDp + ringWidthDp * 2
     val thumbSizeDp = 56.dp
     val thumbVisualOffset = with(density) { ((baseSizeDp - thumbSizeDp) / 2).toPx() }
     val view = LocalView.current
     var wasAtEdge by remember { mutableStateOf(false) }
 
-    Box(
+    // Push-through click: dragging past the stick's edge presses L3/R3,
+    // pulling back inside releases it (with hysteresis so it doesn't chatter)
+    var ringEngaged by remember { mutableStateOf(false) }
+    val pressRadius = with(density) { (baseSizeDp / 2).toPx() }
+    val releaseRadius = with(density) { (baseSizeDp / 2 - 10.dp).toPx() }
+
+    val ringPressed = !editing && clickButton != null && state?.isPressed(clickButton) == true
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(outerSizeDp)) {
+        // L3/R3 ring — a touch screen can't feel a stick press-in, so the ring
+        // around the stick stands in for clicking it
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(CircleShape)
+                .background(if (ringPressed) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.05f))
+                .border(1.dp, if (ringPressed) Color(0xFF4488FF).copy(0.7f) else Color.White.copy(0.12f), CircleShape)
+                .then(
+                    if (!editing && clickButton != null && state != null) {
+                        Modifier.pointerInput(clickButton) {
+                            detectTapGestures(
+                                onPress = {
+                                    state.press(clickButton)
+                                    vibrateHeavy(view)
+                                    tryAwaitRelease()
+                                    state.release(clickButton)
+                                }
+                            )
+                        }
+                    } else Modifier
+                )
+        )
+        if (clickButton != null) {
+            Text(
+                clickButton,
+                color = if (ringPressed) Color.White else Color.Gray.copy(0.7f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp)
+            )
+        }
+
+        // Stick base (drawn on top: its touches never reach the ring)
+        Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(baseSizeDp)
             .clip(CircleShape)
-            .background(Color.White.copy(0.04f))
+            .background(Color(0xFF0D0D0D))
             .border(1.dp, Color.White.copy(0.1f), CircleShape)
             .then(
                 if (!editing) Modifier.pointerInput(Unit) {
@@ -626,10 +677,18 @@ fun AnalogStick(
                         onDragEnd = {
                             onOffsetChange(Offset.Zero, thumbVisualOffset)
                             wasAtEdge = false
+                            if (ringEngaged) {
+                                ringEngaged = false
+                                clickButton?.let { state?.release(it) }
+                            }
                         },
                         onDragCancel = {
                             onOffsetChange(Offset.Zero, thumbVisualOffset)
                             wasAtEdge = false
+                            if (ringEngaged) {
+                                ringEngaged = false
+                                clickButton?.let { state?.release(it) }
+                            }
                         }
                     ) { change, _ ->
                         change.consume()
@@ -643,9 +702,22 @@ fun AnalogStick(
                             Offset(cos(angle) * thumbVisualOffset, sin(angle) * thumbVisualOffset)
                         }
                         if (atEdge && !wasAtEdge) {
-                            vibrateLight(view)
+                            vibrateLight(view) // detent: thumb stops at the edge
                         }
                         wasAtEdge = atEdge
+
+                        // Push-through click: keep pushing well past the edge -> L3/R3
+                        if (clickButton != null && state != null) {
+                            if (!ringEngaged && dist > pressRadius) {
+                                ringEngaged = true
+                                state.press(clickButton)
+                                vibrateHeavy(view)
+                            } else if (ringEngaged && dist < releaseRadius) {
+                                ringEngaged = false
+                                state.release(clickButton)
+                            }
+                        }
+
                         onOffsetChange(clamped, thumbVisualOffset)
                     }
                 } else Modifier
@@ -659,6 +731,7 @@ fun AnalogStick(
                 .background(Color.White.copy(0.15f))
                 .border(1.dp, Color.White.copy(0.2f), CircleShape)
         )
+        }
     }
 }
 
