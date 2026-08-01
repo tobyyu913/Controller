@@ -1000,30 +1000,35 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
                 val rt = cx + w / 2f + gap
                 val top = cy - h / 2f
                 val bot = cy + h / 2f
-                val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
-                    width = 4.dp.toPx(),
+                // A hairline, like the real light bar — a soft wide glow behind a
+                // thin bright core.
+                val coreStroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = 1.6.dp.toPx(),
                     cap = androidx.compose.ui.graphics.StrokeCap.Round
                 )
-                val color = t.ledColor.copy(barAlpha)
+                val glow = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = 5.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                val core = t.ledColor.copy(barAlpha)
+                val halo = t.ledColor.copy(barAlpha * 0.2f)
 
-                // Left strip: up the slanted edge, easing into the top corner
-                drawPath(
-                    androidx.compose.ui.graphics.Path().apply {
-                        moveTo(l + tp, bot)
-                        lineTo(l + r * 0.18f, top + r * 0.75f)
-                        quadraticBezierTo(l, top + r * 0.15f, l + r * 0.55f, top)
-                    },
-                    color, style = stroke
-                )
-                // Right strip: mirrored
-                drawPath(
-                    androidx.compose.ui.graphics.Path().apply {
-                        moveTo(rt - tp, bot)
-                        lineTo(rt - r * 0.18f, top + r * 0.75f)
-                        quadraticBezierTo(rt, top + r * 0.15f, rt - r * 0.55f, top)
-                    },
-                    color, style = stroke
-                )
+                // Each side: the full slanted edge, easing into the top corner
+                val leftPath = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(l + tp, bot)
+                    lineTo(l + r * 0.18f, top + r * 0.75f)
+                    quadraticBezierTo(l, top + r * 0.15f, l + r * 0.55f, top)
+                }
+                val rightPath = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(rt - tp, bot)
+                    lineTo(rt - r * 0.18f, top + r * 0.75f)
+                    quadraticBezierTo(rt, top + r * 0.15f, rt - r * 0.55f, top)
+                }
+                // Soft halo first, then the bright hairline core on top
+                drawPath(leftPath, halo, style = glow)
+                drawPath(rightPath, halo, style = glow)
+                drawPath(leftPath, core, style = coreStroke)
+                drawPath(rightPath, core, style = coreStroke)
             }
         }
 
