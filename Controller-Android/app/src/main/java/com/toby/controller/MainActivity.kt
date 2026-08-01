@@ -75,10 +75,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val layoutStore = LayoutStore(this)
-        // v3: ergonomic shoulder positions — reset old saved positions once
-        if (layoutStore.getLayoutVersion() < 3) {
+        // v4: shoulders shifted inward for longer fingers — reset saved positions once
+        if (layoutStore.getLayoutVersion() < 4) {
             layoutStore.clearLayout()
-            layoutStore.setLayoutVersion(3)
+            layoutStore.setLayoutVersion(4)
         }
         sender = ControllerSender(this)
         btController = BluetoothHidController(this, layoutStore)
@@ -221,13 +221,14 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     // Shoulders follow the index finger curling over the top corner: L2/R2 sit at
     // the very corner (pressed with the middle of the finger), L1/R1 sit lower and
     // further inward where the fingertip naturally lands.
-    val tipInset = 30f * d   // fingertip lands inward of the corner...
+    val trigInset = 34f * d  // L2/R2 pulled inward from the corner (long fingers)
+    val tipInset = 64f * d   // fingertip lands further inward still...
     val tipDrop = trigH + 14f * d  // ...and below the trigger row
     return DefaultPositions(
-        l2 = Offset(m, m),
+        l2 = Offset(m + trigInset, m),
         l1 = Offset(m + tipInset, m + tipDrop),
         r1 = Offset(screenW - m - tipInset - bumpW, m + tipDrop),
-        r2 = Offset(screenW - m - trigW, m),
+        r2 = Offset(screenW - m - trigInset - trigW, m),
         dpad = Offset(max(m, 0.16f * screenW - dpadS / 2), 0.44f * screenH - dpadS / 2),
         faceButtons = Offset(min(screenW - m - faceS, 0.84f * screenW - faceS / 2), 0.44f * screenH - faceS / 2),
         leftStick = Offset(0.35f * screenW - stickS / 2, min(screenH - m - stickS, 0.74f * screenH - stickS / 2)),
