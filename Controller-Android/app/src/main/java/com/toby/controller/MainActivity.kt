@@ -960,7 +960,7 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
     val t = LocalControllerTheme.current
     val conn = LocalConnState.current
 
-    // Slow pulse used while the link is still coming up
+    // Pulse used while the link is still coming up
     val pulse = if (conn.connecting && !conn.connected) {
         val transition = rememberInfiniteTransition(label = "led")
         transition.animateFloat(
@@ -974,46 +974,55 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
         ).value
     } else 1f
 
-    val padW = 214.dp       // wide at the top, tapering in toward the bottom
+    val padW = 214.dp       // widest at the top
     val padH = 96.dp
-    // 10 degrees of lean, same angle as the light bars and Create/Options pills:
-    // 96dp * tan(10deg) ~= 17dp of inset per side
+    // 10 degrees of lean, matching the Create/Options pills:
+    // 96dp * tan(10deg) ~= 17dp of inset per side at the bottom
     val taper = 17.dp
-    val corner = 16.dp
+    val corner = 18.dp
 
     Box(contentAlignment = Alignment.Center) {
-        // Light bar: one continuous strip up the left side, across the top and
-        // down the right — it does not close along the bottom.
+        // Light bar: a strip down each slanted side only — the real pad has no
+        // light across the top or bottom. Each strip follows the touchpad edge
+        // and curves in with the top corner.
         if (t.ledColor != null) {
             val barAlpha = when {
                 conn.connected -> 1f
                 conn.connecting -> pulse * 0.5f
                 else -> 0.12f
             }
-            Canvas(modifier = Modifier.size(padW + 22.dp, padH + 16.dp)) {
+            Canvas(modifier = Modifier.size(padW + 16.dp, padH + 10.dp)) {
                 val w = padW.toPx(); val h = padH.toPx()
                 val tp = taper.toPx(); val r = corner.toPx()
                 val cx = size.width / 2f; val cy = size.height / 2f
-                val l = cx - w / 2f - 5.dp.toPx()
-                val rt = cx + w / 2f + 5.dp.toPx()
-                val top = cy - h / 2f - 3.dp.toPx()
+                val gap = 3.5.dp.toPx()
+                val l = cx - w / 2f - gap
+                val rt = cx + w / 2f + gap
+                val top = cy - h / 2f
                 val bot = cy + h / 2f
-                val path = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(l + tp, bot)
-                    lineTo(l, top + r)
-                    quadraticBezierTo(l, top, l + r, top)
-                    lineTo(rt - r, top)
-                    quadraticBezierTo(rt, top, rt, top + r)
-                    lineTo(rt - tp, bot)
-                }
+                val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = 4.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                val color = t.ledColor.copy(barAlpha)
+
+                // Left strip: up the slanted edge, easing into the top corner
                 drawPath(
-                    path = path,
-                    color = t.ledColor.copy(barAlpha),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = 4.dp.toPx(),
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                        join = androidx.compose.ui.graphics.StrokeJoin.Round
-                    )
+                    androidx.compose.ui.graphics.Path().apply {
+                        moveTo(l + tp, bot)
+                        lineTo(l + r * 0.18f, top + r * 0.75f)
+                        quadraticBezierTo(l, top + r * 0.15f, l + r * 0.55f, top)
+                    },
+                    color, style = stroke
+                )
+                // Right strip: mirrored
+                drawPath(
+                    androidx.compose.ui.graphics.Path().apply {
+                        moveTo(rt - tp, bot)
+                        lineTo(rt - r * 0.18f, top + r * 0.75f)
+                        quadraticBezierTo(rt, top + r * 0.15f, rt - r * 0.55f, top)
+                    },
+                    color, style = stroke
                 )
             }
         }
@@ -1042,26 +1051,26 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
                 val path = androidx.compose.ui.graphics.Path().apply {
                     moveTo(r, 0f)
                     lineTo(w - r, 0f)
-                    quadraticBezierTo(w, 0f, w - r * 0.35f, r)
-                    lineTo(w - tp, h - r * 0.5f)
-                    quadraticBezierTo(w - tp, h, w - tp - r * 0.5f, h)
-                    lineTo(tp + r * 0.5f, h)
-                    quadraticBezierTo(tp, h, tp, h - r * 0.5f)
-                    lineTo(r * 0.35f, r)
+                    quadraticBezierTo(w, 0f, w - r * 0.3f, r * 0.85f)
+                    lineTo(w - tp, h - r * 0.45f)
+                    quadraticBezierTo(w - tp, h, w - tp - r * 0.45f, h)
+                    lineTo(tp + r * 0.45f, h)
+                    quadraticBezierTo(tp, h, tp, h - r * 0.45f)
+                    lineTo(r * 0.3f, r * 0.85f)
                     quadraticBezierTo(0f, 0f, r, 0f)
                     close()
                 }
                 drawPath(path, if (pressed) t.buttonFillPressed else t.buttonFill)
                 drawPath(
-                    path = path,
-                    color = if (pressed) t.borderPressed else t.border,
+                    path,
+                    if (pressed) t.borderPressed else t.border,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx())
                 )
             }
         }
 
         // Player indicator under the touchpad: flashes white while connecting,
-        // stays lit once connected — like a real DualSense
+        // stays lit once connected
         if (t.ledColor != null) {
             val ledAlpha = when {
                 conn.connected -> 0.95f
@@ -1071,8 +1080,8 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .offset(y = 9.dp)
-                    .width(58.dp)
+                    .offset(y = 8.dp)
+                    .width(52.dp)
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(Color.White.copy(ledAlpha))
