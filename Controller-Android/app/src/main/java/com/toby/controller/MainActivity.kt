@@ -12,6 +12,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -81,10 +87,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val layoutStore = LayoutStore(this)
-        // v5: L3/R3 rings around the sticks — reset saved positions once
-        if (layoutStore.getLayoutVersion() < 5) {
+        // v6: DualSense proportions (touchpad, face buttons, d-pad) — reset once
+        if (layoutStore.getLayoutVersion() < 6) {
             layoutStore.clearLayout()
-            layoutStore.setLayoutVersion(5)
+            layoutStore.setLayoutVersion(6)
         }
         sender = ControllerSender(this)
         btController = BluetoothHidController(this, layoutStore)
@@ -216,11 +222,11 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     // Element sizes in px (must match the composables' dp sizes), d = px per dp
     val trigW = 60f * d; val trigH = 34f * d
     val bumpW = 60f * d; val bumpH = 28f * d
-    val dpadS = 132f * d
-    val faceS = 138f * d
+    val dpadS = 126f * d
+    val faceS = 132f * d
     val stickS = 174f * d  // stick (130) + 22dp band each side — constant in every stick-click mode
-    val padW = 210f * d; val padH = 84f * d
-    val pillW = 44f * d
+    val padW = 200f * d; val padH = 96f * d
+    val pillW = 34f * d
     val psS = 34f * d
     val m = 12f * d          // screen edge margin
     val gap = 8f * d
@@ -344,11 +350,14 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     val screenH = with(density) { config.screenHeightDp.dp.toPx() }
     val defaults = remember(screenW, screenH, density) { computeDefaults(screenW, screenH, density.density) }
 
-    CompositionLocalProvider(LocalControllerTheme provides theme) {
+    CompositionLocalProvider(
+        LocalControllerTheme provides theme,
+        LocalConnState provides ConnState(isConnected, isConnecting),
+    ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(theme.bodyColor)
             .systemBarsPadding()
     ) {
         // Backdrop: user image, built-in gradient, or plain black
@@ -393,7 +402,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     else if (connectionMode == "gamepad") btController.statusMessage.ifEmpty { "Gamepad — starting..." }
                     else if (isConnecting) "Searching for server... (${connectionMode})"
                     else "Offline",
-                color = if (editing) Color(0xFF4488FF) else Color.Gray,
+                color = if (editing) theme.accent else theme.onBody,
                 fontSize = 10.sp
             )
         }
@@ -406,13 +415,13 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 .padding(bottom = 6.dp, end = 8.dp)
                 .size(32.dp)
                 .clip(CircleShape)
-                .background(if (showSettings || editing) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.08f))
+                .background(if (showSettings || editing) theme.accent.copy(0.3f) else theme.onBody.copy(0.12f))
                 .pointerInput("settings") {
                     detectTapGestures { showSettings = !showSettings; if (showSettings) editing = false }
                 },
             contentAlignment = Alignment.Center
         ) {
-            Text("\u2699", color = if (showSettings || editing) Color(0xFF4488FF) else Color.Gray, fontSize = 16.sp)
+            Text("\u2699", color = if (showSettings || editing) theme.accent else theme.onBody, fontSize = 16.sp)
         }
 
         // Done button when editing
@@ -478,13 +487,13 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             )
         }
         DraggableElement("create", layoutStore, editing, defaults.create) {
-            SmallPillButton("Create", state, inputDisabled)
+            SystemGlyphButton("Create", state, inputDisabled)
         }
         DraggableElement("touchpad", layoutStore, editing, defaults.touchpad) {
             Touchpad(state, inputDisabled)
         }
         DraggableElement("options", layoutStore, editing, defaults.options) {
-            SmallPillButton("Options", state, inputDisabled)
+            SystemGlyphButton("Options", state, inputDisabled)
         }
         DraggableElement("ps", layoutStore, editing, defaults.ps) {
             PSButton(state, inputDisabled)
@@ -572,7 +581,7 @@ fun loadBitmap(context: android.content.Context, uriString: String): androidx.co
 
 @Composable
 fun DPad(state: ControllerState, editing: Boolean = false) {
-    val btnSize = 44.dp
+    val btnSize = 42.dp
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(btnSize * 3)) {
         Box(
             modifier = Modifier
@@ -603,7 +612,7 @@ fun DPadBtn(symbol: String, name: String, state: ControllerState, editing: Boole
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(42.dp)
+            .size(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (pressed) t.buttonFillPressed else t.buttonFill)
             .then(
@@ -627,7 +636,7 @@ fun DPadBtn(symbol: String, name: String, state: ControllerState, editing: Boole
 
 @Composable
 fun FaceButtons(state: ControllerState, editing: Boolean = false) {
-    val spacing = 46.dp
+    val spacing = 44.dp
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(spacing * 3)) {
         Box(modifier = Modifier.offset(y = -spacing)) {
             FaceBtn("\u25B3", "Triangle", Color(0xFF00CC66), state, editing)
@@ -653,7 +662,7 @@ fun FaceBtn(symbol: String, name: String, color: Color, state: ControllerState, 
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(44.dp)
+            .size(40.dp)
             .clip(CircleShape)
             .background(if (pressed) color.copy(0.4f) else t.buttonFill)
             .border(2.dp, if (pressed) (if (t.faceGlyphOnly) t.borderPressed else color) else ring.copy(if (t.faceGlyphOnly) 1f else 0.5f), CircleShape)
@@ -868,7 +877,7 @@ fun AnalogStick(
         if (clickButton != null && !isRing) {
             Text(
                 clickButton,
-                color = if (ringPressed) t.text else t.textDim,
+                color = if (ringPressed) t.accent else t.onBody,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
@@ -948,11 +957,32 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
     val pressed = !editing && state.isPressed("Touchpad")
     val view = LocalView.current
     val t = LocalControllerTheme.current
+    val conn = LocalConnState.current
+
+    // Slow pulse used while the link is still coming up
+    val pulse = if (conn.connecting && !conn.connected) {
+        val transition = rememberInfiniteTransition(label = "led")
+        transition.animateFloat(
+            initialValue = 0.15f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(700, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "ledAlpha"
+        ).value
+    } else 1f
+
     Box(contentAlignment = Alignment.Center) {
-    // DualSense light bar: a glowing strip down each side of the touchpad
+    // DualSense light bar: glows amber once the link is up
     if (t.ledColor != null) {
+        val barAlpha = when {
+            conn.connected -> 1f
+            conn.connecting -> pulse * 0.5f
+            else -> 0.12f
+        }
         Row(
-            modifier = Modifier.width(226.dp).height(84.dp),
+            modifier = Modifier.width(216.dp).height(96.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -960,17 +990,17 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
                 Box(
                     modifier = Modifier
                         .width(5.dp)
-                        .height(62.dp)
+                        .height(70.dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(t.ledColor.copy(if (pressed) 1f else 0.75f))
+                        .background(t.ledColor.copy(barAlpha))
                 )
             }
         }
     }
     Box(
         modifier = Modifier
-            .width(210.dp)
-            .height(84.dp)
+            .width(200.dp)
+            .height(96.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(if (pressed) t.buttonFillPressed else t.buttonFill)
             .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(14.dp))
@@ -987,6 +1017,24 @@ fun Touchpad(state: ControllerState, editing: Boolean = false) {
                 } else Modifier
             )
     )
+    // Player indicator under the touchpad: flashes white while connecting,
+    // stays lit once connected — like a real DualSense
+    if (t.ledColor != null) {
+        val ledAlpha = when {
+            conn.connected -> 0.95f
+            conn.connecting -> pulse
+            else -> 0.12f
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .offset(y = 9.dp)
+                .width(58.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color.White.copy(ledAlpha))
+        )
+    }
     }
 }
 
@@ -1017,6 +1065,76 @@ fun MuteButton(state: ControllerState, editing: Boolean = false) {
             )
     ) {
         Text("\u1F3A4".let { "\u25CF" }, color = if (pressed) t.text else t.textDim, fontSize = 9.sp)
+    }
+}
+
+/**
+ * DualSense Create / Options buttons. Options is three horizontal lines;
+ * Create is the capture glyph (a frame with a segmented left edge).
+ */
+@Composable
+fun SystemGlyphButton(label: String, state: ControllerState, editing: Boolean = false) {
+    val pressed = !editing && state.isPressed(label)
+    val view = LocalView.current
+    val t = LocalControllerTheme.current
+    val glyph = if (pressed) t.text else t.textDim
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .width(34.dp)
+            .height(24.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (pressed) t.buttonFillPressed else t.buttonFill)
+            .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(6.dp))
+            .then(
+                if (!editing) Modifier.pointerInput(label) {
+                    detectTapGestures(
+                        onPress = {
+                            state.press(label)
+                            vibrateLight(view)
+                            tryAwaitRelease()
+                            state.release(label)
+                        }
+                    )
+                } else Modifier
+            )
+    ) {
+        Canvas(modifier = Modifier.size(16.dp, 12.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = h * 0.14f
+            if (label == "Options") {
+                // Three horizontal lines
+                for (i in 0..2) {
+                    val y = h * (0.22f + 0.28f * i)
+                    drawLine(
+                        color = glyph,
+                        start = Offset(0f, y),
+                        end = Offset(w, y),
+                        strokeWidth = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                }
+            } else {
+                // Create: a frame whose left edge is split into segments
+                drawRect(
+                    color = glyph,
+                    topLeft = Offset(w * 0.28f, 0f),
+                    size = androidx.compose.ui.geometry.Size(w * 0.72f, h),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
+                )
+                for (i in 0..1) {
+                    val y = h * (0.28f + 0.42f * i)
+                    drawLine(
+                        color = glyph,
+                        start = Offset(0f, y),
+                        end = Offset(w * 0.16f, y),
+                        strokeWidth = stroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                }
+            }
+        }
     }
 }
 

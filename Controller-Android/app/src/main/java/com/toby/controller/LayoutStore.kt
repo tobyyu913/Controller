@@ -85,7 +85,8 @@ class LayoutStore(context: Context) {
     fun getTheme(): String = prefs.getString("theme", "dualsense") ?: "dualsense"
 
     fun setWallpaper(id: String) = prefs.edit().putString("wallpaper", id).apply()
-    fun getWallpaper(): String = prefs.getString("wallpaper", "black") ?: "black"
+    // "theme" = follow the theme's own body colour (white for DualSense)
+    fun getWallpaper(): String = prefs.getString("wallpaper", "theme") ?: "theme"
 
     /** Content URI of a user-picked backdrop image, or "" for none. */
     fun setWallpaperUri(uri: String) = prefs.edit().putString("wallpaper_uri", uri).apply()

@@ -12,6 +12,8 @@ import androidx.compose.ui.graphics.Color
 data class ControllerTheme(
     val id: String,
     val label: String,
+    val bodyColor: Color,     // the pad's own body — the default backdrop
+    val onBody: Color,        // text/icons drawn directly on the body
     val accent: Color,
     val buttonFill: Color,
     val buttonFillPressed: Color,
@@ -34,27 +36,31 @@ object Themes {
     val dualsense = ControllerTheme(
         id = "dualsense",
         label = "DualSense",
+        bodyColor = Color(0xFF141416),          // Midnight Black shell
+        onBody = Color(0xFFA8ADB5),
         accent = Color(0xFF2E6FF2),
-        buttonFill = Color(0xFF1C1F26),
-        buttonFillPressed = Color(0xFF3A4250),
-        border = Color(0xFF6E7683).copy(0.55f),
-        borderPressed = Color(0xFFAEB6C2),
-        text = Color(0xFFE8ECF2),
-        textDim = Color(0xFF9AA3B0),
+        buttonFill = Color(0xFF232327),
+        buttonFillPressed = Color(0xFF4A4B52),
+        border = Color(0xFF52545C),
+        borderPressed = Color(0xFF9CA1AA),
+        text = Color(0xFFF2F4F7),
+        textDim = Color(0xFF9DA2AA),
         triangle = Color(0xFF4ED6B0),
         circle = Color(0xFFF2545B),
         cross = Color(0xFF5B8DEF),
         square = Color(0xFFE888C4),
         faceGlyphOnly = true,
-        stickBase = Color(0xFF15181E),
-        stickThumb = Color(0xFF2A2F38),
-        ledColor = Color(0xFF2E6FF2),
-        showMute = true,
+        stickBase = Color(0xFF1B1C20),
+        stickThumb = Color(0xFF34363C),
+        ledColor = Color(0xFFFF8A1F),           // amber light bar when connected
+        showMute = false,
     )
 
     val minimal = ControllerTheme(
         id = "minimal",
         label = "Minimal",
+        bodyColor = Color.Black,
+        onBody = Color.Gray,
         accent = Color(0xFF4488FF),
         buttonFill = Color.White.copy(0.06f),
         buttonFillPressed = Color.White.copy(0.2f),
@@ -76,6 +82,8 @@ object Themes {
     val neon = ControllerTheme(
         id = "neon",
         label = "Neon",
+        bodyColor = Color(0xFF04060C),
+        onBody = Color(0xFF00E5FF).copy(0.8f),
         accent = Color(0xFF00E5FF),
         buttonFill = Color(0xFF0A0E1A),
         buttonFillPressed = Color(0xFF00E5FF).copy(0.35f),
@@ -97,6 +105,8 @@ object Themes {
     val stealth = ControllerTheme(
         id = "stealth",
         label = "Stealth",
+        bodyColor = Color(0xFF08090B),
+        onBody = Color(0xFF7C828C),
         accent = Color(0xFFBFC4CC),
         buttonFill = Color.White.copy(0.03f),
         buttonFillPressed = Color.White.copy(0.14f),
@@ -125,7 +135,8 @@ data class Wallpaper(val id: String, val label: String, val brush: Brush?)
 
 object Wallpapers {
     val all = listOf(
-        Wallpaper("black", "Black", null),
+        Wallpaper("theme", "Theme", null),
+        Wallpaper("black", "Black", Brush.verticalGradient(listOf(Color.Black, Color.Black))),
         Wallpaper("slate", "Slate", Brush.verticalGradient(listOf(Color(0xFF11141A), Color(0xFF05060A)))),
         Wallpaper("midnight", "Midnight", Brush.verticalGradient(listOf(Color(0xFF0A1330), Color(0xFF03050D)))),
         Wallpaper("ember", "Ember", Brush.verticalGradient(listOf(Color(0xFF2A0F12), Color(0xFF070405)))),
@@ -136,3 +147,8 @@ object Wallpapers {
 }
 
 val LocalControllerTheme = staticCompositionLocalOf { Themes.dualsense }
+
+/** Live link state, so the light bar and player indicator can reflect it. */
+data class ConnState(val connected: Boolean, val connecting: Boolean)
+
+val LocalConnState = staticCompositionLocalOf { ConnState(false, false) }
