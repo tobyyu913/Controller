@@ -253,6 +253,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     var connectionMode by remember { mutableStateOf(layoutStore.getConnectionMode()) }
     var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
     var layoutTick by remember { mutableStateOf(0) }
+    var stickClick by remember { mutableStateOf(layoutStore.getStickClickEnabled()) }
 
     // Sync state from whichever controller is active
     fun syncState() {
@@ -410,7 +411,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 offset = state.leftStick,
                 onOffsetChange = { offset, radius -> state.setLeftStick(offset, radius) },
                 editing = inputDisabled,
-                clickButton = "L3",
+                clickButton = if (stickClick) "L3" else null,
                 state = state,
             )
         }
@@ -419,7 +420,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 offset = state.rightStick,
                 onOffsetChange = { offset, radius -> state.setRightStick(offset, radius) },
                 editing = inputDisabled,
-                clickButton = "R3",
+                clickButton = if (stickClick) "R3" else null,
                 state = state,
             )
         }
@@ -476,6 +477,11 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     editing = true
                 },
                 onResetLayout = { layoutStore.clearLayout(); layoutTick++ },
+                stickClick = stickClick,
+                onStickClickChange = { on ->
+                    stickClick = on
+                    layoutStore.setStickClickEnabled(on)
+                },
                 onClose = { showSettings = false },
                 btController = btController,
                 onMakeDiscoverable = {
@@ -605,7 +611,8 @@ fun AnalogStick(
     val density = LocalDensity.current
     val baseSizeDp = 130.dp
     val ringWidthDp = 22.dp
-    val outerSizeDp = baseSizeDp + ringWidthDp * 2
+    // No ring when stick-click is off — the stick keeps its plain footprint
+    val outerSizeDp = if (clickButton != null) baseSizeDp + ringWidthDp * 2 else baseSizeDp
     val thumbSizeDp = 56.dp
     val thumbVisualOffset = with(density) { ((baseSizeDp - thumbSizeDp) / 2).toPx() }
     val view = LocalView.current
@@ -622,28 +629,28 @@ fun AnalogStick(
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(outerSizeDp)) {
         // L3/R3 ring — a touch screen can't feel a stick press-in, so the ring
         // around the stick stands in for clicking it
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .clip(CircleShape)
-                .background(if (ringPressed) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.05f))
-                .border(1.dp, if (ringPressed) Color(0xFF4488FF).copy(0.7f) else Color.White.copy(0.12f), CircleShape)
-                .then(
-                    if (!editing && clickButton != null && state != null) {
-                        Modifier.pointerInput(clickButton) {
-                            detectTapGestures(
-                                onPress = {
-                                    state.press(clickButton)
-                                    vibrateHeavy(view)
-                                    tryAwaitRelease()
-                                    state.release(clickButton)
-                                }
-                            )
-                        }
-                    } else Modifier
-                )
-        )
         if (clickButton != null) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(CircleShape)
+                    .background(if (ringPressed) Color(0xFF4488FF).copy(0.3f) else Color.White.copy(0.05f))
+                    .border(1.dp, if (ringPressed) Color(0xFF4488FF).copy(0.7f) else Color.White.copy(0.12f), CircleShape)
+                    .then(
+                        if (!editing && state != null) {
+                            Modifier.pointerInput(clickButton) {
+                                detectTapGestures(
+                                    onPress = {
+                                        state.press(clickButton)
+                                        vibrateHeavy(view)
+                                        tryAwaitRelease()
+                                        state.release(clickButton)
+                                    }
+                                )
+                            }
+                        } else Modifier
+                    )
+            )
             Text(
                 clickButton,
                 color = if (ringPressed) Color.White else Color.Gray.copy(0.7f),
@@ -897,6 +904,8 @@ fun SettingsOverlay(
     onClose: () -> Unit,
     btController: BluetoothHidController,
     onMakeDiscoverable: () -> Unit,
+    stickClick: Boolean,
+    onStickClickChange: (Boolean) -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -1041,6 +1050,43 @@ fun SettingsOverlay(
                     "Connect USB cable and open Controller on Mac.\nADB reverse forwarding is automatic.",
                     color = Color.Gray, fontSize = 10.sp
                 )
+            }
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
+
+            // -- Controls --
+            Text("Controls", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput("stickClick") {
+                        detectTapGestures { onStickClickChange(!stickClick) }
+                    }
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Stick click (L3/R3)", color = Color.White, fontSize = 13.sp)
+                    Text(
+                        "Ring around each stick — tap it, or push the stick past its edge",
+                        color = Color.Gray, fontSize = 9.sp
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .width(44.dp)
+                        .height(24.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (stickClick) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.12f)),
+                    contentAlignment = if (stickClick) Alignment.CenterEnd else Alignment.CenterStart
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .padding(2.dp)
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(if (stickClick) 0.95f else 0.5f))
+                    )
+                }
             }
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))

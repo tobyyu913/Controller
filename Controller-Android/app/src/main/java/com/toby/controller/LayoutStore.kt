@@ -68,6 +68,15 @@ class LayoutStore(context: Context) {
         return prefs.getString("server_host", "") ?: ""
     }
 
+    /** Whether the L3/R3 rings around the sticks exist at all. */
+    fun setStickClickEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("stick_click_enabled", enabled).apply()
+    }
+
+    fun getStickClickEnabled(): Boolean {
+        return prefs.getBoolean("stick_click_enabled", true)
+    }
+
     fun setLastBtHost(address: String) {
         prefs.edit().putString("last_bt_host", address).apply()
     }
