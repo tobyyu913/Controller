@@ -792,8 +792,8 @@ fun AnalogStick(
         )
         }
 
-        // Arc label last, so the stick base can't cover it. Sits to the LEFT of
-        // the arc for both L3 and R3.
+        // Arc label last, so the stick base can't cover it. Sits on the outer
+        // side of each arc — away from the sticks, toward the screen edges.
         if (clickButton != null && !isRing) {
             Text(
                 clickButton,
@@ -802,7 +802,7 @@ fun AnalogStick(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .align(if (innerIsRight) Alignment.CenterEnd else Alignment.CenterStart)
-                    .offset(x = if (innerIsRight) -(bandDp + 16.dp) else -(bandDp + 2.dp))
+                    .offset(x = if (innerIsRight) 20.dp else -(bandDp + 2.dp))
             )
         }
     }
