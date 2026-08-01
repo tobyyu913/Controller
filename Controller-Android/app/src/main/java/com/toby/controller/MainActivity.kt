@@ -75,10 +75,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val layoutStore = LayoutStore(this)
-        // v2: DualSense-style default layout — reset old saved positions once
-        if (layoutStore.getLayoutVersion() < 2) {
+        // v3: ergonomic shoulder positions — reset old saved positions once
+        if (layoutStore.getLayoutVersion() < 3) {
             layoutStore.clearLayout()
-            layoutStore.setLayoutVersion(2)
+            layoutStore.setLayoutVersion(3)
         }
         sender = ControllerSender(this)
         btController = BluetoothHidController(this, layoutStore)
@@ -218,10 +218,15 @@ fun computeDefaults(screenW: Float, screenH: Float, d: Float): DefaultPositions 
     // Real DualSense geometry, scaled to the screen: shoulders in the corners,
     // D-Pad / face buttons outboard, symmetric sticks low and toward the center,
     // big touchpad top-center with Create/Options flanking it, PS between the sticks.
+    // Shoulders follow the index finger curling over the top corner: L2/R2 sit at
+    // the very corner (pressed with the middle of the finger), L1/R1 sit lower and
+    // further inward where the fingertip naturally lands.
+    val tipInset = 30f * d   // fingertip lands inward of the corner...
+    val tipDrop = trigH + 14f * d  // ...and below the trigger row
     return DefaultPositions(
         l2 = Offset(m, m),
-        l1 = Offset(m + trigW + gap, m + (trigH - bumpH) / 2),
-        r1 = Offset(screenW - m - trigW - gap - bumpW, m + (trigH - bumpH) / 2),
+        l1 = Offset(m + tipInset, m + tipDrop),
+        r1 = Offset(screenW - m - tipInset - bumpW, m + tipDrop),
         r2 = Offset(screenW - m - trigW, m),
         dpad = Offset(max(m, 0.16f * screenW - dpadS / 2), 0.44f * screenH - dpadS / 2),
         faceButtons = Offset(min(screenW - m - faceS, 0.84f * screenW - faceS / 2), 0.44f * screenH - faceS / 2),
