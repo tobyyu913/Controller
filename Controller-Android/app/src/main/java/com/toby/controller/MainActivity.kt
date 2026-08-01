@@ -667,15 +667,18 @@ fun AnalogStick(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 3.dp)
             )
         } else if (clickButton != null) {
-            // Curved button hugging the stick on its inner side
-            val arcColor = if (ringPressed) Color(0xFF4488FF) else Color.White.copy(0.3f)
-            val strokePx = with(density) { 15.dp.toPx() }
+            // Curved button hugging the stick on its inner side — styled like the
+            // shoulder buttons (same fill, same border tone)
+            val arcColor = if (ringPressed) Color.White.copy(0.2f) else Color.White.copy(0.06f)
+            val strokePx = with(density) { 10.dp.toPx() }
             Canvas(modifier = Modifier.matchParentSize()) {
                 val r = (size.minDimension - strokePx) / 2f
+                // Border tone underneath, then the fill inset by 1dp — reads like
+                // the 1dp-bordered shoulder buttons
                 drawArc(
-                    color = arcColor,
-                    startAngle = if (innerIsRight) -34f else 146f,
-                    sweepAngle = 68f,
+                    color = Color.White.copy(0.12f),
+                    startAngle = if (innerIsRight) -25f else 155f,
+                    sweepAngle = 50f,
                     useCenter = false,
                     topLeft = Offset(size.width / 2f - r, size.height / 2f - r),
                     size = androidx.compose.ui.geometry.Size(r * 2, r * 2),
@@ -684,13 +687,26 @@ fun AnalogStick(
                         cap = androidx.compose.ui.graphics.StrokeCap.Round
                     )
                 )
+                val innerStroke = strokePx - with(density) { 2.dp.toPx() }
+                drawArc(
+                    color = arcColor,
+                    startAngle = if (innerIsRight) -25f else 155f,
+                    sweepAngle = 50f,
+                    useCenter = false,
+                    topLeft = Offset(size.width / 2f - r, size.height / 2f - r),
+                    size = androidx.compose.ui.geometry.Size(r * 2, r * 2),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = innerStroke,
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                )
             }
             // Hit area confined to the arc's side so it can't swallow stray taps
             Box(
                 modifier = Modifier
                     .align(if (innerIsRight) Alignment.CenterEnd else Alignment.CenterStart)
-                    .width(bandDp + 12.dp)
-                    .height(baseSizeDp * 0.62f)
+                    .width(bandDp + 8.dp)
+                    .height(baseSizeDp * 0.5f)
                     .then(
                         if (!editing && state != null) {
                             Modifier.pointerInput(clickButton) {
