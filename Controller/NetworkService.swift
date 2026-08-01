@@ -297,11 +297,12 @@ class ControllerServer {
         }
     }
 
-    // Publish to SwiftUI at most ~60x/s (button changes always go through immediately)
+    // Publish to SwiftUI at most ~30x/s (button changes always go through immediately).
+    // Input never waits on this — the mapper is fed directly via onMessage.
     private func publishToUI(_ msg: ControllerMessage, clientId: String) {
         let now = Date()
         let buttonsChanged = msg.pressedButtons != lastUIButtons
-        guard buttonsChanged || now.timeIntervalSince(lastUIPublish) >= 0.016 else { return }
+        guard buttonsChanged || now.timeIntervalSince(lastUIPublish) >= 0.033 else { return }
         lastUIPublish = now
         lastUIButtons = msg.pressedButtons
         DispatchQueue.main.async { [weak self] in

@@ -248,6 +248,7 @@ struct UniversalView: View {
     @State private var activePreset: String = "Custom"
     @State private var axTrusted = AXIsProcessTrusted()
     @State private var vhidConnected = false
+    @State private var localIP = "…"
     private let axTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -291,7 +292,7 @@ struct UniversalView: View {
                     Text("Connection")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
 
-                    Text(server.wifiClosed ? "Wi‑Fi closed (USB active)" : "Wi‑Fi \(server.getLocalIP()):9876")
+                    Text(server.wifiClosed ? "Wi‑Fi closed (USB active)" : "Wi‑Fi \(localIP):9876")
                         .font(.system(size: 11, design: .monospaced))
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(server.wifiClosed ? .gray.opacity(0.15) : .green.opacity(0.12))
@@ -330,6 +331,7 @@ struct UniversalView: View {
                     Toggle("Enable Keyboard/Mouse Mapping", isOn: $mapper.isEnabled)
                         .toggleStyle(.switch)
                         .onChange(of: mapper.isEnabled) {
+                            UserDefaults.standard.set(mapper.isEnabled, forKey: "mappingEnabled")
                             mapper.updateActivityAssertion()
                             if !mapper.isEnabled {
                                 mapper.releaseAll()
@@ -585,14 +587,25 @@ struct UniversalView: View {
         .onAppear {
             sensitivity = mapper.mapping.mouseSensitivity
             smoothingMs = (mapper.mapping.smoothing * 1000).rounded()
-            smoothingMs = (mapper.mapping.smoothing * 1000).rounded()
             axTrusted = AXIsProcessTrusted()
+            localIP = server.getLocalIP()
             // Direct network→mapper hot path, bypassing SwiftUI entirely
             let m = mapper
             server.onMessage = { msg in m.process(msg) }
+            // Restore Enable across launches (only if permission is still there)
+            if UserDefaults.standard.bool(forKey: "mappingEnabled"), axTrusted, !mapper.isEnabled {
+                mapper.isEnabled = true
+            }
+            // Prime the HID badge immediately instead of waiting for the 2s timer
+            if mapper.virtualMouseMode {
+                _ = VirtualMouse.shared.connect()
+                VirtualMouse.shared.pollStatus()
+                vhidConnected = VirtualMouse.shared.isReady
+            }
         }
         .onReceive(axTimer) { _ in
             axTrusted = AXIsProcessTrusted()
+            localIP = server.getLocalIP()
             if mapper.virtualMouseMode {
                 if !VirtualMouse.shared.isConnected { _ = VirtualMouse.shared.connect() }
                 VirtualMouse.shared.pollStatus()
