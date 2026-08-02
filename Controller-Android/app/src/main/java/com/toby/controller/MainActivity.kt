@@ -327,6 +327,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     var deadzone by remember { mutableStateOf(layoutStore.getDeadzone()) }
     var gyroOn by remember { mutableStateOf(layoutStore.getGyroEnabled()) }
     var gyroSens by remember { mutableStateOf(layoutStore.getGyroSens()) }
+    var gyroInvertY by remember { mutableStateOf(layoutStore.getGyroInvertY()) }
     var turboOn by remember { mutableStateOf(layoutStore.getTurboEnabled()) }
     var turboRate by remember { mutableStateOf(layoutStore.getTurboRate()) }
     var analogTriggers by remember { mutableStateOf(layoutStore.getAnalogTriggers()) }
@@ -339,7 +340,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     }
 
     // Gyro aiming: fold the phone's angular rate into the right stick
-    DisposableEffect(gyroOn, gyroSens) {
+    DisposableEffect(gyroOn, gyroSens, gyroInvertY) {
         if (!gyroOn) {
             state.gyroX = 0.0; state.gyroY = 0.0
             onDispose { }
@@ -348,11 +349,16 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
             val listener = object : android.hardware.SensorEventListener {
                 override fun onSensorChanged(e: android.hardware.SensorEvent) {
-                    // Landscape: device Y axis turns the camera horizontally,
-                    // device X axis pitches it. Scaled to stick units.
+                    // Gyro axes are fixed to the device body (portrait-relative).
+                    // Held in landscape the portrait X axis points up the screen, so
+                    // it carries yaw (turn), and the portrait Y axis lies across the
+                    // screen, so it carries pitch (look up/down).
                     val k = gyroSens * 0.35f
-                    val yaw = -e.values[1] * k
-                    val pitch = -e.values[0] * k
+                    // Flip when the phone is held the other way round
+                    val flip = if (activity.display?.rotation == android.view.Surface.ROTATION_270) -1f else 1f
+                    var yaw = -e.values[0] * k * flip
+                    var pitch = -e.values[1] * k * flip
+                    if (gyroInvertY) pitch = -pitch
                     state.gyroX = yaw.toDouble().coerceIn(-1.0, 1.0)
                     state.gyroY = pitch.toDouble().coerceIn(-1.0, 1.0)
                     state.onInput?.invoke()
@@ -678,6 +684,8 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 deadzone = deadzone, onDeadzone = { deadzone = it; layoutStore.setDeadzone(it) },
                 gyroOn = gyroOn, onGyroOn = { gyroOn = it; layoutStore.setGyroEnabled(it) },
                 gyroSens = gyroSens, onGyroSens = { gyroSens = it; layoutStore.setGyroSens(it) },
+                gyroInvertY = gyroInvertY,
+                onGyroInvertY = { gyroInvertY = it; layoutStore.setGyroInvertY(it) },
                 turboOn = turboOn, onTurboOn = { turboOn = it; layoutStore.setTurboEnabled(it) },
                 turboRate = turboRate, onTurboRate = { turboRate = it; layoutStore.setTurboRate(it) },
                 analogTriggers = analogTriggers,
@@ -1519,6 +1527,7 @@ fun SettingsOverlay(
     deadzone: Float, onDeadzone: (Float) -> Unit,
     gyroOn: Boolean, onGyroOn: (Boolean) -> Unit,
     gyroSens: Float, onGyroSens: (Float) -> Unit,
+    gyroInvertY: Boolean, onGyroInvertY: (Boolean) -> Unit,
     turboOn: Boolean, onTurboOn: (Boolean) -> Unit,
     turboRate: Int, onTurboRate: (Int) -> Unit,
     analogTriggers: Boolean, onAnalogTriggers: (Boolean) -> Unit,
@@ -1709,6 +1718,7 @@ fun SettingsOverlay(
             SettingSwitch("Gyro aiming", "Tilt the phone to fine-aim the camera", gyroOn, onGyroOn)
             if (gyroOn) {
                 SettingSlider("Gyro sensitivity", gyroSens, 0.1f, 2f) { onGyroSens(it) }
+                SettingSwitch("Invert gyro Y", "Tilt up looks down", gyroInvertY, onGyroInvertY)
             }
 
             SettingSwitch("Stick deadzone", "Ignore tiny thumb movement near centre", dzOn, onDzOn)

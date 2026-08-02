@@ -104,6 +104,9 @@ class LayoutStore(context: Context) {
     fun setGyroSens(v: Float) = prefs.edit().putFloat("gyro_sens", v).apply()
     fun getGyroSens(): Float = prefs.getFloat("gyro_sens", 0.5f)
 
+    fun setGyroInvertY(v: Boolean) = prefs.edit().putBoolean("gyro_inv_y", v).apply()
+    fun getGyroInvertY(): Boolean = prefs.getBoolean("gyro_inv_y", false)
+
     fun setTurboEnabled(v: Boolean) = prefs.edit().putBoolean("turbo_on", v).apply()
     fun getTurboEnabled(): Boolean = prefs.getBoolean("turbo_on", false)
     fun setTurboRate(v: Int) = prefs.edit().putInt("turbo_rate", v).apply()
