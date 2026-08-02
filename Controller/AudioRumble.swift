@@ -184,11 +184,6 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
         }
         let sharp = sharpSmoothed
 
-        frameCount += 1
-        if frameCount % 60 == 0 {
-            log(String(format: "low %.3f high %.3f -> level %.2f sharp %.2f", lowRms, highRms, out, sharp))
-        }
-
         DispatchQueue.main.async { [weak self] in
             self?.level = out
             self?.sharpness = sharp
