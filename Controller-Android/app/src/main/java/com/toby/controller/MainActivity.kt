@@ -328,6 +328,40 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         state.analogTriggers = analogTriggers
     }
 
+    // Audio rumble: the receiver streams a bass level; drive the motor with it.
+    // Short overlapping one-shots give a continuous, amplitude-varying buzz.
+    DisposableEffect(rumbleOn) {
+        if (!rumbleOn) {
+            sender.onRumble = null
+            onDispose { }
+        } else {
+            val vib = try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    (activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
+                        as VibratorManager).defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                }
+            } catch (_: Exception) { null }
+            var lastFire = 0L
+            sender.onRumble = { level ->
+                val amp = (level * 255).toInt().coerceIn(0, 255)
+                val now = android.os.SystemClock.uptimeMillis()
+                if (vib != null && amp > 12 && now - lastFire >= 28) {
+                    lastFire = now
+                    try {
+                        vib.vibrate(VibrationEffect.createOneShot(55L, amp))
+                    } catch (_: Exception) {}
+                }
+            }
+            onDispose {
+                sender.onRumble = null
+                try { vib?.cancel() } catch (_: Exception) {}
+            }
+        }
+    }
+
     // Turbo: re-fire held face/shoulder buttons at the chosen rate
     LaunchedEffect(turboOn, turboRate) {
         if (!turboOn) return@LaunchedEffect
@@ -1673,7 +1707,7 @@ fun SettingsOverlay(
                 SettingSlider("Turbo rate", turboRate.toFloat(), 2f, 25f) { onTurboRate(it.toInt()) }
             }
 
-            SettingSwitch("Rumble", "Vibrate when a game sends rumble (Gamepad mode)", rumbleOn, onRumbleOn)
+            SettingSwitch("Audio rumble", "Buzz with the bass of the game's sound (enable it on the Mac too)", rumbleOn, onRumbleOn)
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
 

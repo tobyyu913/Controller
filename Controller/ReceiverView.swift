@@ -284,6 +284,9 @@ struct UniversalView: View {
     @State private var axTrusted = AXIsProcessTrusted()
     @State private var vhidConnected = false
     @State private var localIP = "…"
+    @State private var audioRumble = AudioRumble()
+    @State private var rumbleGain: Double = 1.0
+    private let rumbleTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
     @State private var didAutoEnable = false
     private let axTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -423,6 +426,43 @@ struct UniversalView: View {
                             .foregroundStyle(vhidConnected ? .green : .red)
                     }
                 }
+                // Audio rumble
+                HStack {
+                    Toggle("Audio rumble (buzz the phone with the bass)", isOn: Binding(
+                        get: { audioRumble.isRunning },
+                        set: { on in on ? audioRumble.start() : audioRumble.stop() }
+                    ))
+                    .toggleStyle(.switch)
+                    Spacer()
+                    if let err = audioRumble.errorMessage {
+                        Text(err)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.red)
+                    } else if audioRumble.isRunning {
+                        // Live level meter
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 3).fill(Color.gray.opacity(0.15))
+                                .frame(width: 80, height: 6)
+                            RoundedRectangle(cornerRadius: 3).fill(Color.green)
+                                .frame(width: max(0, 80 * audioRumble.level), height: 6)
+                        }
+                    }
+                }
+                if audioRumble.isRunning {
+                    HStack {
+                        Text("Rumble strength")
+                            .font(.system(size: 12, design: .monospaced))
+                        Slider(value: $rumbleGain, in: 0.2...3, step: 0.1)
+                            .frame(width: 200)
+                            .onChange(of: rumbleGain) { audioRumble.gain = rumbleGain }
+                        Text(String(format: "%.1f", rumbleGain))
+                            .font(.system(size: 12, design: .monospaced)).frame(width: 30)
+                    }
+                }
+                Text("Captures system audio and buzzes the phone on bass — works in any game, no game support needed. Needs Screen Recording permission.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+
                 // Per-game profiles
                 HStack {
                     Toggle("Per-game profiles (auto-pick preset for the frontmost game)", isOn: $mapper.perGameProfiles)
@@ -644,6 +684,9 @@ struct UniversalView: View {
                 VirtualMouse.shared.pollStatus()
                 vhidConnected = VirtualMouse.shared.isReady
             }
+        }
+        .onReceive(rumbleTimer) { _ in
+            if audioRumble.isRunning { server.sendRumble(audioRumble.level) }
         }
         .onReceive(axTimer) { _ in
             axTrusted = AXIsProcessTrusted()

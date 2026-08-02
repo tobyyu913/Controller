@@ -16,6 +16,8 @@ class ControllerSender(private val context: Context) {
     private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val writeLock = Any()
     private val latest = AtomicReference<ControllerMessage?>(null)
+    /// Called with 0..1 when the receiver pushes a rumble level
+    var onRumble: ((Double) -> Unit)? = null
     private var senderJob: Job? = null
 
     private var nsdManager: NsdManager? = null
@@ -76,6 +78,7 @@ class ControllerSender(private val context: Context) {
                 // (unordered) and never tied to the UI frame cadence.
                 senderJob?.cancel()
                 senderJob = scope.launch { sendPump() }
+                scope.launch { readLoop(s) }
 
                 // Stay connected until socket is closed by send failure or stop()
                 while (scope.isActive && isConnected) {
@@ -139,6 +142,38 @@ class ControllerSender(private val context: Context) {
     /** Cheap and thread-safe: just records the newest state; sendPump transmits it. */
     fun send(message: ControllerMessage) {
         latest.set(message)
+    }
+
+    /** Reads frames the receiver sends back (currently just rumble levels). */
+    private fun readLoop(sock: Socket) {
+        try {
+            val input = sock.getInputStream()
+            val header = ByteArray(4)
+            while (scope.isActive && isConnected) {
+                var read = 0
+                while (read < 4) {
+                    val n = input.read(header, read, 4 - read)
+                    if (n < 0) return
+                    read += n
+                }
+                val len = ((header[0].toInt() and 0xFF) shl 24) or
+                        ((header[1].toInt() and 0xFF) shl 16) or
+                        ((header[2].toInt() and 0xFF) shl 8) or
+                        (header[3].toInt() and 0xFF)
+                if (len <= 0 || len > 65536) return
+                val payload = ByteArray(len)
+                read = 0
+                while (read < len) {
+                    val n = input.read(payload, read, len - read)
+                    if (n < 0) return
+                    read += n
+                }
+                try {
+                    val obj = org.json.JSONObject(String(payload, Charsets.UTF_8))
+                    if (obj.has("rumble")) onRumble?.invoke(obj.getDouble("rumble"))
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
     }
 
     private suspend fun sendPump() {

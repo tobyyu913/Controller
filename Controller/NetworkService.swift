@@ -297,6 +297,20 @@ class ControllerServer {
         }
     }
 
+    /// Push a rumble level (0...1) to every connected phone. Same framing as
+    /// inbound messages: 4-byte big-endian length + JSON.
+    func sendRumble(_ level: Double) {
+        guard !connections.isEmpty else { return }
+        let json = "{\"rumble\":\(String(format: "%.3f", level))}"
+        guard let payload = json.data(using: .utf8) else { return }
+        var length = UInt32(payload.count).bigEndian
+        var frame = Data(bytes: &length, count: 4)
+        frame.append(payload)
+        for (_, conn) in connections {
+            conn.send(content: frame, completion: .contentProcessed { _ in })
+        }
+    }
+
     // Publish to SwiftUI at most ~30x/s (button changes always go through immediately).
     // Input never waits on this — the mapper is fed directly via onMessage.
     private func publishToUI(_ msg: ControllerMessage, clientId: String) {
