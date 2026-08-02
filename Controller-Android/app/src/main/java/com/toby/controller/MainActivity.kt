@@ -1479,7 +1479,12 @@ fun SettingSlider(label: String, value: Float, min: Float, max: Float, onChange:
             value = value,
             onValueChange = onChange,
             valueRange = min..max,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = Color(0xFF4488FF),
+                activeTrackColor = Color(0xFF4488FF),
+                inactiveTrackColor = Color.White.copy(0.15f),
+            )
         )
         Text(
             String.format("%.2f", value).trimEnd('0').trimEnd('.'),
