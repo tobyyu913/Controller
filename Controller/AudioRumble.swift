@@ -44,9 +44,9 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
     }
 
     /// Level below which nothing is sent. Game mode ignores far more.
-    private var threshold: Double { mode == .music ? 0.05 : 0.30 }
+    private var threshold: Double { mode == .music ? 0.05 : 0.20 }
     /// Extra drive in music mode so quiet passages still register.
-    private var modeGain: Double { mode == .music ? 1.0 : 0.55 }
+    private var modeGain: Double { mode == .music ? 1.0 : 0.75 }
 
     private var stream: SCStream?
     private let sampleQueue = DispatchQueue(label: "controller.audio", qos: .userInitiated)
@@ -199,7 +199,7 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
         if mode == .game {
             runningAvg = runningAvg * 0.98 + combined * 0.02
             let onset = combined - runningAvg
-            out = onset < 0.12 ? 0 : min(1.0, out * min(1.0, onset * 3.0))
+            out = onset < 0.07 ? 0 : min(1.0, out * min(1.0, onset * 5.0))
         }
 
         // Sharpness comes from the RAW band energies. Using the envelopes was
