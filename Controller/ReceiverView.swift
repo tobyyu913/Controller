@@ -453,6 +453,29 @@ struct UniversalView: View {
                     }
                 }
                 if audioRumble.enabled {
+                    HStack(spacing: 8) {
+                        Text("Rumble mode")
+                            .font(.system(size: 12, design: .monospaced))
+                        ForEach(AudioRumble.Mode.allCases) { m in
+                            Button {
+                                audioRumble.mode = m
+                            } label: {
+                                Text(m.label)
+                                    .font(.system(size: 11, weight: audioRumble.mode == m ? .bold : .regular, design: .monospaced))
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(audioRumble.mode == m ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
+                                    .foregroundStyle(audioRumble.mode == m ? Color.blue : Color.primary)
+                                    .cornerRadius(5)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Text(audioRumble.mode == .music
+                             ? "everything rumbles"
+                             : "only impacts — ignores ambience and dialogue")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
                     HStack {
                         Text("Rumble strength")
                             .font(.system(size: 12, design: .monospaced))

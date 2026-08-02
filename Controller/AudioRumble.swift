@@ -26,10 +26,27 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
     private(set) var isRunning = false
     private(set) var errorMessage: String?
 
-    /// How strongly bass maps to rumble.
+    /// How strongly the audio maps to rumble.
     var gain: Double = 1.0
-    /// Level below which nothing is sent, so quiet passages stay still.
-    var threshold: Double = 0.06
+
+    enum Mode: String, CaseIterable, Identifiable {
+        /// Everything rumbles — for music, where constant response is the point.
+        case music
+        /// Only distinct hits rumble — for games, so dialogue, footsteps and
+        /// ambience stay quiet and explosions still land.
+        case game
+        var id: String { rawValue }
+        var label: String { self == .music ? "Music" : "Game" }
+    }
+
+    var mode: Mode = Mode(rawValue: UserDefaults.standard.string(forKey: "audioRumbleMode") ?? "music") ?? .music {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "audioRumbleMode") }
+    }
+
+    /// Level below which nothing is sent. Game mode ignores far more.
+    private var threshold: Double { mode == .music ? 0.05 : 0.30 }
+    /// Extra drive in music mode so quiet passages still register.
+    private var modeGain: Double { mode == .music ? 1.0 : 0.55 }
 
     private var stream: SCStream?
     private let sampleQueue = DispatchQueue(label: "controller.audio", qos: .userInitiated)
@@ -43,6 +60,7 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
     private var hpPrevIn: Double = 0
     private var hpPrevMid: Double = 0
     private var sharpSmoothed: Double = 0
+    private var runningAvg: Double = 0
     private var envelope: Double = 0
     private var highEnvelope: Double = 0
     private var frameCount = 0
@@ -166,13 +184,23 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
 
         // Envelope followers: snap up on a hit, ease back down, so notes read as
         // distinct thumps instead of a constant buzz.
-        let lowTarget = min(1.0, lowRms * 9.0 * gain)
-        let highTarget = min(1.0, highRms * 6.0 * gain)
+        let g = gain * modeGain
+        let lowTarget = min(1.0, lowRms * 9.0 * g)
+        let highTarget = min(1.0, highRms * 6.0 * g)
         envelope = lowTarget > envelope ? lowTarget : envelope * 0.80 + lowTarget * 0.20
         highEnvelope = highTarget > highEnvelope ? highTarget : highEnvelope * 0.70 + highTarget * 0.30
 
         let combined = max(envelope, highEnvelope)
-        let out = combined < threshold ? 0 : min(1.0, (combined - threshold) / (1 - threshold))
+        var out = combined < threshold ? 0 : min(1.0, (combined - threshold) / (1 - threshold))
+
+        // Game mode: only react to a sudden jump above the recent average, so a
+        // steady soundtrack or crowd noise does not buzz continuously — only
+        // impacts, explosions and hits do.
+        if mode == .game {
+            runningAvg = runningAvg * 0.98 + combined * 0.02
+            let onset = combined - runningAvg
+            out = onset < 0.12 ? 0 : min(1.0, out * min(1.0, onset * 3.0))
+        }
 
         // Sharpness comes from the RAW band energies. Using the envelopes was
         // wrong: both saturate at 1.0 on anything loud, which collapsed every
