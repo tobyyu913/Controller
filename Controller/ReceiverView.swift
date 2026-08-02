@@ -51,6 +51,7 @@ struct ReceiverView: View {
                         stickDisplay(label: "L Stick", x: msg.leftStickX, y: msg.leftStickY,
                                      clicked: msg.pressedButtons.contains("L3"))
                         buttonGroup(title: "Triggers", buttons: ["L1", "L2", "L3"], pressed: msg.pressedButtons)
+                        triggerBar(label: "L2 analog", value: msg.leftTrigger)
                         buttonGroup(title: "D-Pad", buttons: ["DPadUp", "DPadDown", "DPadLeft", "DPadRight"], pressed: msg.pressedButtons)
                     }
 
@@ -65,6 +66,7 @@ struct ReceiverView: View {
                         stickDisplay(label: "R Stick", x: msg.rightStickX, y: msg.rightStickY,
                                      clicked: msg.pressedButtons.contains("R3"))
                         buttonGroup(title: "Triggers", buttons: ["R1", "R2", "R3"], pressed: msg.pressedButtons)
+                        triggerBar(label: "R2 analog", value: msg.rightTrigger)
                         buttonGroup(title: "Face", buttons: ["Triangle", "Circle", "Cross", "Square"], pressed: msg.pressedButtons)
                     }
                 }
@@ -120,6 +122,22 @@ struct ReceiverView: View {
             Text(String(format: "%.1f, %.1f", x, y))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func triggerBar(label: String, value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(label)  \(String(format: "%.2f", value))")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.15))
+                    .frame(width: 90, height: 6)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.blue)
+                    .frame(width: max(0, min(90, 90 * value)), height: 6)
+            }
         }
     }
 
@@ -405,6 +423,16 @@ struct UniversalView: View {
                             .foregroundStyle(vhidConnected ? .green : .red)
                     }
                 }
+                // Per-game profiles
+                HStack {
+                    Toggle("Per-game profiles (auto-pick preset for the frontmost game)", isOn: $mapper.perGameProfiles)
+                        .toggleStyle(.switch)
+                        .onChange(of: mapper.perGameProfiles) {
+                            UserDefaults.standard.set(mapper.perGameProfiles, forKey: "perGameProfiles")
+                        }
+                    Spacer()
+                }
+
                 Text("Motion is delivered as genuine mouse hardware, for games that ignore synthetic input. Requires the controller-vhid-bridge helper (run with sudo).")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)

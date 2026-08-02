@@ -92,6 +92,29 @@ class LayoutStore(context: Context) {
     fun setWallpaperUri(uri: String) = prefs.edit().putString("wallpaper_uri", uri).apply()
     fun getWallpaperUri(): String = prefs.getString("wallpaper_uri", "") ?: ""
 
+    // -- Gameplay --
+
+    fun setDeadzoneEnabled(v: Boolean) = prefs.edit().putBoolean("dz_on", v).apply()
+    fun getDeadzoneEnabled(): Boolean = prefs.getBoolean("dz_on", true)
+    fun setDeadzone(v: Float) = prefs.edit().putFloat("dz", v).apply()
+    fun getDeadzone(): Float = prefs.getFloat("dz", 0.08f)
+
+    fun setGyroEnabled(v: Boolean) = prefs.edit().putBoolean("gyro_on", v).apply()
+    fun getGyroEnabled(): Boolean = prefs.getBoolean("gyro_on", false)
+    fun setGyroSens(v: Float) = prefs.edit().putFloat("gyro_sens", v).apply()
+    fun getGyroSens(): Float = prefs.getFloat("gyro_sens", 0.5f)
+
+    fun setTurboEnabled(v: Boolean) = prefs.edit().putBoolean("turbo_on", v).apply()
+    fun getTurboEnabled(): Boolean = prefs.getBoolean("turbo_on", false)
+    fun setTurboRate(v: Int) = prefs.edit().putInt("turbo_rate", v).apply()
+    fun getTurboRate(): Int = prefs.getInt("turbo_rate", 12)   // presses per second
+
+    fun setAnalogTriggers(v: Boolean) = prefs.edit().putBoolean("analog_trig", v).apply()
+    fun getAnalogTriggers(): Boolean = prefs.getBoolean("analog_trig", true)
+
+    fun setRumbleEnabled(v: Boolean) = prefs.edit().putBoolean("rumble_on", v).apply()
+    fun getRumbleEnabled(): Boolean = prefs.getBoolean("rumble_on", true)
+
     fun setLastBtHost(address: String) {
         prefs.edit().putString("last_bt_host", address).apply()
     }

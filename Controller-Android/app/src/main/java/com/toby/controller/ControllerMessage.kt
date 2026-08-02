@@ -11,6 +11,8 @@ data class ControllerMessage(
     val leftStickY: Double,
     val rightStickX: Double,
     val rightStickY: Double,
+    val leftTrigger: Double = 0.0,    // analog L2, 0..1
+    val rightTrigger: Double = 0.0,   // analog R2, 0..1
 ) {
     fun toFramedBytes(): ByteArray {
         val json = JSONObject().apply {
@@ -19,6 +21,8 @@ data class ControllerMessage(
             put("leftStickY", leftStickY)
             put("rightStickX", rightStickX)
             put("rightStickY", rightStickY)
+            put("leftTrigger", leftTrigger)
+            put("rightTrigger", rightTrigger)
         }
         val payload = json.toString().toByteArray(Charsets.UTF_8)
         val frame = ByteBuffer.allocate(4 + payload.size)

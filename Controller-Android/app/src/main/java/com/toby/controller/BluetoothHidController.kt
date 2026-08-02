@@ -31,7 +31,13 @@ class BluetoothHidController(private val context: Context, private val layoutSto
     var onStateChanged: (() -> Unit)? = null
 
     // Last report sent — replayed when the host asks via GET_REPORT
-    private val lastReport = ByteArray(7).also { it[2] = HAT_NEUTRAL; it[3] = 128.toByte(); it[4] = 128.toByte(); it[5] = 128.toByte(); it[6] = 128.toByte() }
+    private val lastReport = ByteArray(9).also {
+        it[2] = HAT_NEUTRAL
+        it[3] = 128.toByte(); it[4] = 128.toByte(); it[5] = 128.toByte(); it[6] = 128.toByte()
+    }
+
+    /** Vibrate when the host sends a rumble report (games in Gamepad mode). */
+    var rumbleEnabled = true
 
     // HID Report Descriptor: standard gamepad, report ID 1.
     // 14 buttons + hat switch (D-Pad) + 4 axes (X/Y = left stick, Z/Rz = right stick).
@@ -80,6 +86,25 @@ class BluetoothHidController(private val context: Context, private val layoutSto
         0x75, 0x08,                          //   Report Size (8)
         0x95.toByte(), 0x04,                 //   Report Count (4)
         0x81.toByte(), 0x02,                 //   Input (Data, Variable, Absolute)
+
+        // Analog triggers: Rx / Ry, 0..255
+        0x09, 0x33,                          //   Usage (Rx) — L2
+        0x09, 0x34,                          //   Usage (Ry) — R2
+        0x15, 0x00,                          //   Logical Minimum (0)
+        0x26, 0xFF.toByte(), 0x00,           //   Logical Maximum (255)
+        0x75, 0x08,                          //   Report Size (8)
+        0x95.toByte(), 0x02,                 //   Report Count (2)
+        0x81.toByte(), 0x02,                 //   Input (Data, Variable, Absolute)
+
+        // Rumble: two output bytes (strong, weak) the host can push to us
+        0x85.toByte(), REPORT_ID_RUMBLE,     //   Report ID (2)
+        0x06, 0x00, 0xFF.toByte(),           //   Usage Page (Vendor Defined)
+        0x09, 0x01,                          //   Usage (Vendor 1)
+        0x15, 0x00,                          //   Logical Minimum (0)
+        0x26, 0xFF.toByte(), 0x00,           //   Logical Maximum (255)
+        0x75, 0x08,                          //   Report Size (8)
+        0x95.toByte(), 0x02,                 //   Report Count (2)
+        0x91.toByte(), 0x02,                 //   Output (Data, Variable, Absolute)
 
         0xC0.toByte()                        // End Collection
     )
@@ -211,8 +236,10 @@ class BluetoothHidController(private val context: Context, private val layoutSto
             override fun onSetReport(device: BluetoothDevice?, type: Byte, id: Byte, data: ByteArray?) {
                 val hid2 = hidDevice ?: return
                 if (device == null) return
+                if (id == REPORT_ID_RUMBLE) playRumble(data)
                 hid2.reportError(device, BluetoothHidDevice.ERROR_RSP_SUCCESS)
             }
+
         }
 
         val result = hid.registerApp(sdp, null, null, executor, callback)
@@ -252,7 +279,7 @@ class BluetoothHidController(private val context: Context, private val layoutSto
         val device = hostDevice ?: return
         if (!isConnected) return
 
-        val report = ByteArray(7)
+        val report = ByteArray(9)
 
         // 14-bit button field (2 bytes)
         var buttons = 0
@@ -285,9 +312,32 @@ class BluetoothHidController(private val context: Context, private val layoutSto
         report[4] = axis(message.leftStickY)
         report[5] = axis(message.rightStickX)
         report[6] = axis(message.rightStickY)
+        report[7] = (message.leftTrigger * 255).toInt().coerceIn(0, 255).toByte()
+        report[8] = (message.rightTrigger * 255).toInt().coerceIn(0, 255).toByte()
 
         report.copyInto(lastReport)
         hid.sendReport(device, REPORT_ID.toInt(), report)
+    }
+
+    /** data = [strong, weak], 0..255 each. */
+    private fun playRumble(data: ByteArray?) {
+        if (!rumbleEnabled || data == null || data.isEmpty()) return
+        val strong = (data.getOrNull(0)?.toInt() ?: 0) and 0xFF
+        val weak = (data.getOrNull(1)?.toInt() ?: 0) and 0xFF
+        val amplitude = maxOf(strong, weak)
+        if (amplitude <= 0) return
+        try {
+            val vib = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
+                    as android.os.VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+            }
+            vib.vibrate(
+                android.os.VibrationEffect.createOneShot(60L, amplitude.coerceIn(1, 255))
+            )
+        } catch (_: Exception) {}
     }
 
     private fun axis(v: Double): Byte = (128 + v * 127).toInt().coerceIn(0, 255).toByte()
@@ -306,6 +356,7 @@ class BluetoothHidController(private val context: Context, private val layoutSto
 
     companion object {
         const val REPORT_ID: Byte = 1
+        const val REPORT_ID_RUMBLE: Byte = 2
         const val HAT_NEUTRAL: Byte = 8
     }
 }

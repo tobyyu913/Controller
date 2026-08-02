@@ -1,6 +1,7 @@
 package com.toby.controller
 
 import android.bluetooth.BluetoothAdapter
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -24,7 +25,10 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -129,6 +133,30 @@ class ControllerState {
     var rightStick by mutableStateOf(Offset.Zero)
     var stickRadiusPx: Float = 1f
 
+    // Gameplay settings, applied when the outgoing message is built
+    var deadzone: Double = 0.0            // 0 = off
+    var analogTriggers: Boolean = true
+    var leftTrigger: Double = 0.0         // 0..1 analog pull
+    var rightTrigger: Double = 0.0
+    // Gyro aim: an angular rate folded into the right stick, which the receiver
+    // already treats as a velocity
+    var gyroX: Double = 0.0
+    var gyroY: Double = 0.0
+
+    fun setTrigger(name: String, value: Double) {
+        if (name == "L2") leftTrigger = value else rightTrigger = value
+        onInput?.invoke()
+    }
+
+    /** Radial deadzone, rescaled so travel past the threshold still spans 0..1. */
+    private fun applyDeadzone(x: Double, y: Double): Pair<Double, Double> {
+        if (deadzone <= 0.0) return x to y
+        val mag = sqrt(x * x + y * y)
+        if (mag < deadzone) return 0.0 to 0.0
+        val scaled = ((mag - deadzone) / (1.0 - deadzone)).coerceIn(0.0, 1.0)
+        return (x / mag * scaled) to (y / mag * scaled)
+    }
+
     // Fires on every input mutation so sends happen immediately,
     // not a UI frame later via recomposition
     var onInput: (() -> Unit)? = null
@@ -154,13 +182,35 @@ class ControllerState {
         onInput?.invoke()
     }
 
-    fun toMessage() = ControllerMessage(
-        pressedButtons = pressedButtons.toList(),
-        leftStickX = (leftStick.x / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
-        leftStickY = (leftStick.y / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
-        rightStickX = (rightStick.x / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
-        rightStickY = (rightStick.y / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
-    )
+    fun toMessage(): ControllerMessage {
+        val (lx, ly) = applyDeadzone(
+            (leftStick.x / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
+            (leftStick.y / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
+        )
+        var (rx, ry) = applyDeadzone(
+            (rightStick.x / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
+            (rightStick.y / stickRadiusPx).toDouble().coerceIn(-1.0, 1.0),
+        )
+        // Gyro adds to the right stick so it works with every receiver mode
+        rx = (rx + gyroX).coerceIn(-1.0, 1.0)
+        ry = (ry + gyroY).coerceIn(-1.0, 1.0)
+
+        // With analog triggers on, L2/R2 also report as pressed past a light
+        // threshold so button-only receivers still see them
+        val buttons = pressedButtons.toMutableList()
+        if (analogTriggers) {
+            if (leftTrigger > 0.12 && "L2" !in buttons) buttons.add("L2")
+            if (rightTrigger > 0.12 && "R2" !in buttons) buttons.add("R2")
+        }
+
+        return ControllerMessage(
+            pressedButtons = buttons,
+            leftStickX = lx, leftStickY = ly,
+            rightStickX = rx, rightStickY = ry,
+            leftTrigger = if (analogTriggers) leftTrigger else (if ("L2" in buttons) 1.0 else 0.0),
+            rightTrigger = if (analogTriggers) rightTrigger else (if ("R2" in buttons) 1.0 else 0.0),
+        )
+    }
 }
 
 // -- Draggable wrapper for edit mode --
@@ -273,6 +323,67 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
     var serverHost by remember { mutableStateOf(layoutStore.getServerHost()) }
     var layoutTick by remember { mutableStateOf(0) }
     var stickClick by remember { mutableStateOf(layoutStore.getStickClickMode()) }
+    var dzOn by remember { mutableStateOf(layoutStore.getDeadzoneEnabled()) }
+    var deadzone by remember { mutableStateOf(layoutStore.getDeadzone()) }
+    var gyroOn by remember { mutableStateOf(layoutStore.getGyroEnabled()) }
+    var gyroSens by remember { mutableStateOf(layoutStore.getGyroSens()) }
+    var turboOn by remember { mutableStateOf(layoutStore.getTurboEnabled()) }
+    var turboRate by remember { mutableStateOf(layoutStore.getTurboRate()) }
+    var analogTriggers by remember { mutableStateOf(layoutStore.getAnalogTriggers()) }
+    var rumbleOn by remember { mutableStateOf(layoutStore.getRumbleEnabled()) }
+
+    // Push gameplay settings into the state used when building messages
+    SideEffect {
+        state.deadzone = if (dzOn) deadzone.toDouble() else 0.0
+        state.analogTriggers = analogTriggers
+    }
+
+    // Gyro aiming: fold the phone's angular rate into the right stick
+    DisposableEffect(gyroOn, gyroSens) {
+        if (!gyroOn) {
+            state.gyroX = 0.0; state.gyroY = 0.0
+            onDispose { }
+        } else {
+            val sm = activity.getSystemService(Context.SENSOR_SERVICE) as android.hardware.SensorManager
+            val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
+            val listener = object : android.hardware.SensorEventListener {
+                override fun onSensorChanged(e: android.hardware.SensorEvent) {
+                    // Landscape: device Y axis turns the camera horizontally,
+                    // device X axis pitches it. Scaled to stick units.
+                    val k = gyroSens * 0.35f
+                    val yaw = -e.values[1] * k
+                    val pitch = -e.values[0] * k
+                    state.gyroX = yaw.toDouble().coerceIn(-1.0, 1.0)
+                    state.gyroY = pitch.toDouble().coerceIn(-1.0, 1.0)
+                    state.onInput?.invoke()
+                }
+                override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+            }
+            sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+            onDispose {
+                sm.unregisterListener(listener)
+                state.gyroX = 0.0; state.gyroY = 0.0
+            }
+        }
+    }
+
+    // Turbo: re-fire held face/shoulder buttons at the chosen rate
+    LaunchedEffect(turboOn, turboRate) {
+        if (!turboOn) return@LaunchedEffect
+        val turboable = setOf("Cross", "Circle", "Square", "Triangle", "L1", "R1", "L2", "R2")
+        while (true) {
+            val period = (1000L / turboRate.coerceIn(2, 25)).coerceAtLeast(20L)
+            kotlinx.coroutines.delay(period)
+            val held = state.pressedButtons.filter { it in turboable }
+            if (held.isEmpty()) continue
+            // Blink the buttons off then on so the receiver sees discrete presses
+            held.forEach { state.pressedButtons.remove(it) }
+            state.onInput?.invoke()
+            kotlinx.coroutines.delay(period / 2)
+            held.forEach { if (it !in state.pressedButtons) state.pressedButtons.add(it) }
+            state.onInput?.invoke()
+        }
+    }
     var themeId by remember { mutableStateOf(layoutStore.getTheme()) }
     var wallpaperId by remember { mutableStateOf(layoutStore.getWallpaper()) }
     var wallpaperUri by remember { mutableStateOf(layoutStore.getWallpaperUri()) }
@@ -450,7 +561,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
         val inputDisabled = editing || showSettings
         key(layoutTick) {
         DraggableElement("l2", layoutStore, editing, defaults.l2) {
-            TriggerButton("L2", state, inputDisabled)
+            TriggerButton("L2", state, inputDisabled, analog = analogTriggers)
         }
         DraggableElement("l1", layoutStore, editing, defaults.l1) {
             BumperButton("L1", state, inputDisabled)
@@ -459,7 +570,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
             BumperButton("R1", state, inputDisabled)
         }
         DraggableElement("r2", layoutStore, editing, defaults.r2) {
-            TriggerButton("R2", state, inputDisabled)
+            TriggerButton("R2", state, inputDisabled, analog = analogTriggers)
         }
         DraggableElement("dpad", layoutStore, editing, defaults.dpad) {
             DPad(state, inputDisabled)
@@ -563,6 +674,16 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 wallpaperId = wallpaperId,
                 onWallpaperChange = { id -> wallpaperId = id; layoutStore.setWallpaper(id) },
                 onPickWallpaper = { pickImage.launch(arrayOf("image/*")) },
+                dzOn = dzOn, onDzOn = { dzOn = it; layoutStore.setDeadzoneEnabled(it) },
+                deadzone = deadzone, onDeadzone = { deadzone = it; layoutStore.setDeadzone(it) },
+                gyroOn = gyroOn, onGyroOn = { gyroOn = it; layoutStore.setGyroEnabled(it) },
+                gyroSens = gyroSens, onGyroSens = { gyroSens = it; layoutStore.setGyroSens(it) },
+                turboOn = turboOn, onTurboOn = { turboOn = it; layoutStore.setTurboEnabled(it) },
+                turboRate = turboRate, onTurboRate = { turboRate = it; layoutStore.setTurboRate(it) },
+                analogTriggers = analogTriggers,
+                onAnalogTriggers = { analogTriggers = it; layoutStore.setAnalogTriggers(it) },
+                rumbleOn = rumbleOn,
+                onRumbleOn = { rumbleOn = it; layoutStore.setRumbleEnabled(it); btController.rumbleEnabled = it },
             )
         }
     }
@@ -892,10 +1013,12 @@ fun AnalogStick(
 // -- Triggers & Bumpers --
 
 @Composable
-fun TriggerButton(label: String, state: ControllerState, editing: Boolean = false) {
+fun TriggerButton(label: String, state: ControllerState, editing: Boolean = false, analog: Boolean = false) {
     val pressed = !editing && state.isPressed(label)
     val view = LocalView.current
     val t = LocalControllerTheme.current
+    var pull by remember { mutableStateOf(0f) }   // 0..1, how far the trigger is drawn
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -905,19 +1028,76 @@ fun TriggerButton(label: String, state: ControllerState, editing: Boolean = fals
             .background(if (pressed) t.buttonFillPressed else t.buttonFill)
             .border(1.dp, if (pressed) t.borderPressed else t.border, RoundedCornerShape(6.dp))
             .then(
-                if (!editing) Modifier.pointerInput(label) {
-                    detectTapGestures(
-                        onPress = {
-                            state.press(label)
-                            vibrateLight(view)
-                            tryAwaitRelease()
-                            state.release(label)
-                        }
-                    )
+                if (!editing) Modifier.pointerInput(label, analog) {
+                    if (analog) {
+                        // Press = light pull; slide down the button for more, like
+                        // squeezing a real trigger
+                        detectTriggerPull(
+                            onStart = {
+                                pull = 0.35f
+                                state.press(label)
+                                state.setTrigger(label, pull.toDouble())
+                                vibrateLight(view)
+                            },
+                            onDrag = { dy ->
+                                pull = (pull + dy / (size.height * 1.2f)).coerceIn(0f, 1f)
+                                state.setTrigger(label, pull.toDouble())
+                            },
+                            onEnd = {
+                                pull = 0f
+                                state.setTrigger(label, 0.0)
+                                state.release(label)
+                            }
+                        )
+                    } else {
+                        detectTapGestures(
+                            onPress = {
+                                state.press(label)
+                                state.setTrigger(label, 1.0)
+                                vibrateLight(view)
+                                tryAwaitRelease()
+                                state.setTrigger(label, 0.0)
+                                state.release(label)
+                            }
+                        )
+                    }
                 } else Modifier
             )
     ) {
+        // Fill shows how far the trigger is pulled
+        if (analog && pull > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(pull)
+                    .align(Alignment.CenterStart)
+                    .background(t.accent.copy(0.35f))
+            )
+        }
         Text(label, color = if (pressed) t.text else t.textDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** Press-and-slide gesture used by the analog triggers. */
+suspend fun PointerInputScope.detectTriggerPull(
+    onStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onEnd: () -> Unit,
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        onStart()
+        var last = down.position.y
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            val dy = change.position.y - last
+            last = change.position.y
+            if (dy != 0f) onDrag(dy)
+            change.consume()
+        }
+        onEnd()
     }
 }
 
@@ -1260,6 +1440,55 @@ fun PSButton(state: ControllerState, editing: Boolean = false) {
     }
 }
 
+@Composable
+fun SettingSwitch(title: String, subtitle: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(title) { detectTapGestures { onChange(!value) } }
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 13.sp)
+            Text(subtitle, color = Color.Gray, fontSize = 9.sp)
+        }
+        Box(
+            modifier = Modifier
+                .width(42.dp)
+                .height(23.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (value) Color(0xFF4488FF).copy(0.5f) else Color.White.copy(0.12f)),
+            contentAlignment = if (value) Alignment.CenterEnd else Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(2.dp)
+                    .size(19.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(if (value) 0.95f else 0.5f))
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingSlider(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.Gray, fontSize = 10.sp, modifier = Modifier.width(96.dp))
+        androidx.compose.material3.Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = min..max,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            String.format("%.2f", value).trimEnd('0').trimEnd('.'),
+            color = Color.White, fontSize = 10.sp,
+            modifier = Modifier.width(34.dp)
+        )
+    }
+}
+
 // -- Settings Overlay --
 
 @Composable
@@ -1281,6 +1510,14 @@ fun SettingsOverlay(
     wallpaperId: String,
     onWallpaperChange: (String) -> Unit,
     onPickWallpaper: () -> Unit,
+    dzOn: Boolean, onDzOn: (Boolean) -> Unit,
+    deadzone: Float, onDeadzone: (Float) -> Unit,
+    gyroOn: Boolean, onGyroOn: (Boolean) -> Unit,
+    gyroSens: Float, onGyroSens: (Float) -> Unit,
+    turboOn: Boolean, onTurboOn: (Boolean) -> Unit,
+    turboRate: Int, onTurboRate: (Int) -> Unit,
+    analogTriggers: Boolean, onAnalogTriggers: (Boolean) -> Unit,
+    rumbleOn: Boolean, onRumbleOn: (Boolean) -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -1456,6 +1693,30 @@ fun SettingsOverlay(
             )
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
+
+            // -- Gameplay --
+            Text("Gameplay", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+
+            SettingSwitch("Analog L2/R2", "Slide down a trigger to pull it further", analogTriggers, onAnalogTriggers)
+
+            SettingSwitch("Gyro aiming", "Tilt the phone to fine-aim the camera", gyroOn, onGyroOn)
+            if (gyroOn) {
+                SettingSlider("Gyro sensitivity", gyroSens, 0.1f, 2f) { onGyroSens(it) }
+            }
+
+            SettingSwitch("Stick deadzone", "Ignore tiny thumb movement near centre", dzOn, onDzOn)
+            if (dzOn) {
+                SettingSlider("Deadzone", deadzone, 0f, 0.3f) { onDeadzone(it) }
+            }
+
+            SettingSwitch("Turbo", "Held face/shoulder buttons auto-repeat", turboOn, onTurboOn)
+            if (turboOn) {
+                SettingSlider("Turbo rate", turboRate.toFloat(), 2f, 25f) { onTurboRate(it.toInt()) }
+            }
+
+            SettingSwitch("Rumble", "Vibrate when a game sends rumble (Gamepad mode)", rumbleOn, onRumbleOn)
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
 

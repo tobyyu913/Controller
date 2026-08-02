@@ -297,6 +297,9 @@ class InputMapper {
     /// Route mouse motion through the virtual HID device (real hardware path)
     /// instead of synthetic CGEvents.
     var virtualMouseMode = UserDefaults.standard.bool(forKey: "virtualMouseMode")
+    /// Auto-select a preset based on the frontmost app (e.g. WuWa -> WuWa preset).
+    var perGameProfiles = UserDefaults.standard.bool(forKey: "perGameProfiles")
+    @ObservationIgnored private var lastProfileApp = ""
     @ObservationIgnored private var targetPid: pid_t = 0
 
     @ObservationIgnored private var pressedKeys: Set<CGKeyCode> = []
@@ -416,9 +419,13 @@ class InputMapper {
             cachedCenter = CGPoint(x: b.midX, y: b.midY)
             // Track the frontmost app for WuWa/injection mode (never ourselves)
             DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 if let app = NSWorkspace.shared.frontmostApplication,
                    app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                    self?.targetPid = app.processIdentifier
+                    self.targetPid = app.processIdentifier
+                    if self.perGameProfiles {
+                        self.applyProfile(for: app.bundleIdentifier ?? "")
+                    }
                 }
             }
         }
@@ -589,6 +596,23 @@ class InputMapper {
         // Real mice carry hardware timestamps; engines weight camera velocity by them
         moveEvent.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
         postEvent(moveEvent)
+    }
+
+    /// Switch presets to match the frontmost game, once per app change.
+    private func applyProfile(for bundleId: String) {
+        guard bundleId != lastProfileApp else { return }
+        lastProfileApp = bundleId
+        let preset: ControllerMapping.Preset?
+        switch bundleId {
+        case "com.kurogame.mingchao": preset = .wuwa
+        default: preset = nil
+        }
+        guard let preset else { return }
+        let saved = mapping
+        var m = ControllerMapping.preset(preset)
+        m.mouseSensitivity = saved.mouseSensitivity   // keep the user's feel settings
+        m.smoothing = saved.smoothing
+        mapping = m
     }
 
     /// System-wide post by default; WuWa mode injects straight into the game's pid.
