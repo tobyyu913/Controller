@@ -345,13 +345,18 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                 }
             } catch (_: Exception) { null }
             var lastFire = 0L
-            sender.onRumble = { level ->
-                val amp = (level * 255).toInt().coerceIn(0, 255)
+            sender.onRumble = { level, sharp ->
+                // Deep bass -> long, gentle roll. Brighter, percussive sound ->
+                // short, hard tick. sharp is 0 (all bass) .. 1 (all treble).
+                val duration = (95L - (sharp * 70L)).toLong().coerceIn(22L, 95L)
+                val softening = 0.55 + sharp * 0.45      // bass is deliberately subtler
+                val amp = (level * softening * 255).toInt().coerceIn(0, 255)
+                val minGap = if (sharp > 0.5) 22L else 45L
                 val now = android.os.SystemClock.uptimeMillis()
-                if (vib != null && amp > 12 && now - lastFire >= 28) {
+                if (vib != null && amp > 10 && now - lastFire >= minGap) {
                     lastFire = now
                     try {
-                        vib.vibrate(VibrationEffect.createOneShot(55L, amp))
+                        vib.vibrate(VibrationEffect.createOneShot(duration, amp))
                     } catch (_: Exception) {}
                 }
             }

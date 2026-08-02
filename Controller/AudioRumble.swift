@@ -16,8 +16,13 @@ import AVFoundation
 
 @Observable
 final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
-    /// Current bass level, 0...1. Read by the server and pushed to phones.
+    /// Current level, 0...1. Read by the server and pushed to phones.
     private(set) var level: Double = 0
+    /// 0 = pure bass (soft, rolling), 1 = bright/percussive (short, sharp).
+    private(set) var sharpness: Double = 0
+    /// What the user asked for — the toggle binds to this, not to isRunning,
+    /// so a permission failure doesn't silently flip the switch back.
+    var enabled = UserDefaults.standard.bool(forKey: "audioRumble")
     private(set) var isRunning = false
     private(set) var errorMessage: String?
 
@@ -28,13 +33,46 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
 
     private var stream: SCStream?
     private let sampleQueue = DispatchQueue(label: "controller.audio", qos: .userInitiated)
+    private let videoQueue = DispatchQueue(label: "controller.audio.video", qos: .utility)
 
     // One-pole low-pass state (keeps only the bass) and an envelope follower
     private var lpState: Double = 0
+    private var lpState2: Double = 0
+    private var hpState: Double = 0
+    private var hpState2: Double = 0
+    private var hpPrevIn: Double = 0
+    private var hpPrevMid: Double = 0
+    private var sharpSmoothed: Double = 0
     private var envelope: Double = 0
+    private var highEnvelope: Double = 0
+    private var frameCount = 0
+    private var decodeFailures = 0
+
+    private func log(_ text: String) {
+        let line = "\(Date().formatted(date: .omitted, time: .standard))  \(text)\n"
+        if let data = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: "/tmp/controller_audio.log")
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile(); handle.write(data); try? handle.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+    }
 
     func start() {
+        enabled = true
+        UserDefaults.standard.set(true, forKey: "audioRumble")
         guard !isRunning else { return }
+
+        // Prompt for Screen Recording if we don't have it — otherwise the capture
+        // just fails and the feature looks broken.
+        if !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
+            errorMessage = "Allow Screen Recording, then relaunch"
+            log("no screen recording permission")
+            return
+        }
         Task { @MainActor in
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(
@@ -50,25 +88,34 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
                 config.excludesCurrentProcessAudio = true
                 config.sampleRate = 48000
                 config.channelCount = 2
-                // Video is unavoidable in a stream; keep it tiny and slow.
-                config.width = 2
-                config.height = 2
-                config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+                // A stream will not deliver audio unless a video output is also
+                // attached, so we take the smallest, slowest video we can and
+                // throw every frame away.
+                config.width = 128
+                config.height = 128
+                config.minimumFrameInterval = CMTime(value: 1, timescale: 2)
+                config.queueDepth = 3
+                config.showsCursor = false
 
                 let s = SCStream(filter: filter, configuration: config, delegate: self)
                 try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+                try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
                 try await s.startCapture()
                 stream = s
                 isRunning = true
                 errorMessage = nil
+                log("capture started")
             } catch {
-                errorMessage = "Needs Screen Recording permission"
+                errorMessage = "Capture failed: \(error.localizedDescription)"
                 isRunning = false
+                log("start failed: \(error)")
             }
         }
     }
 
     func stop() {
+        enabled = false
+        UserDefaults.standard.set(false, forKey: "audioRumble")
         let s = stream
         stream = nil
         isRunning = false
@@ -79,26 +126,73 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
     // MARK: - SCStreamOutput
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, sampleBuffer.isValid else { return }
-        guard let samples = Self.monoSamples(from: sampleBuffer), !samples.isEmpty else { return }
-
-        // One-pole low-pass ~120 Hz at 48 kHz, then RMS of what's left.
-        // alpha = dt / (RC + dt); RC = 1 / (2*pi*fc)
-        let alpha = 0.0155
-        var sumSquares = 0.0
-        for sample in samples {
-            lpState += alpha * (Double(sample) - lpState)
-            sumSquares += lpState * lpState
+        guard type == .audio, sampleBuffer.isValid else { return }   // video frames discarded
+        guard let samples = Self.monoSamples(from: sampleBuffer), !samples.isEmpty else {
+            decodeFailures += 1
+            if decodeFailures % 100 == 1 { log("audio buffer arrived but could not decode PCM") }
+            return
         }
-        let rms = (sumSquares / Double(samples.count)).squareRoot()
 
-        // Envelope follower: snap up on a hit, ease back down so each bass note
-        // reads as a distinct thump instead of a constant buzz.
-        let target = min(1.0, rms * 6.0 * gain)
-        envelope = target > envelope ? target : envelope * 0.82 + target * 0.18
+        // Split into a low band and everything above it. The low band drives a
+        // soft rolling rumble; the rest makes the hit feel sharp.
+        // Independent filters for each band. Deriving "high" by subtracting the
+        // low-passed signal does NOT work: the filter shifts phase, so the
+        // subtraction leaves a big residual and deep bass reads as bright.
+        // Both are two cascaded one-poles (12 dB/oct) on the decimated stream.
+        let lpAlpha = 0.06    // low-pass  ~115 Hz
+        let hpAlpha = 0.884   // high-pass ~250 Hz
+        var lowSquares = 0.0
+        var highSquares = 0.0
+        for sample in samples {
+            let x = Double(sample)
 
-        let out = envelope < threshold ? 0 : min(1.0, (envelope - threshold) / (1 - threshold))
-        DispatchQueue.main.async { [weak self] in self?.level = out }
+            // Low band
+            lpState += lpAlpha * (x - lpState)
+            lpState2 += lpAlpha * (lpState - lpState2)
+            lowSquares += lpState2 * lpState2
+
+            // High band
+            let h1 = hpAlpha * (hpState + x - hpPrevIn)
+            hpPrevIn = x
+            hpState = h1
+            let h2 = hpAlpha * (hpState2 + h1 - hpPrevMid)
+            hpPrevMid = h1
+            hpState2 = h2
+            highSquares += h2 * h2
+        }
+        let n = Double(samples.count)
+        let lowRms = (lowSquares / n).squareRoot()
+        let highRms = (highSquares / n).squareRoot()
+
+        // Envelope followers: snap up on a hit, ease back down, so notes read as
+        // distinct thumps instead of a constant buzz.
+        let lowTarget = min(1.0, lowRms * 9.0 * gain)
+        let highTarget = min(1.0, highRms * 6.0 * gain)
+        envelope = lowTarget > envelope ? lowTarget : envelope * 0.80 + lowTarget * 0.20
+        highEnvelope = highTarget > highEnvelope ? highTarget : highEnvelope * 0.70 + highTarget * 0.30
+
+        let combined = max(envelope, highEnvelope)
+        let out = combined < threshold ? 0 : min(1.0, (combined - threshold) / (1 - threshold))
+
+        // Sharpness comes from the RAW band energies. Using the envelopes was
+        // wrong: both saturate at 1.0 on anything loud, which collapsed every
+        // ratio to 0.5 and made deep bass report as bright.
+        let total = lowRms + highRms
+        if total > 0.0005 {
+            let instant = min(1.0, (highRms / total) * 1.25)
+            sharpSmoothed = sharpSmoothed * 0.7 + instant * 0.3
+        }
+        let sharp = sharpSmoothed
+
+        frameCount += 1
+        if frameCount % 60 == 0 {
+            log(String(format: "low %.3f high %.3f -> level %.2f sharp %.2f", lowRms, highRms, out, sharp))
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.level = out
+            self?.sharpness = sharp
+        }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -109,37 +203,67 @@ final class AudioRumble: NSObject, SCStreamDelegate, SCStreamOutput {
     }
 
     /// Flatten an audio sample buffer to mono floats.
+    ///
+    /// The audio is stereo and non-interleaved, so the buffer list holds one
+    /// buffer per channel. A bare AudioBufferList only has room for one, which
+    /// makes the fetch fail outright — the list has to be sized from the buffer.
     private static func monoSamples(from sampleBuffer: CMSampleBuffer) -> [Float]? {
-        guard let description = sampleBuffer.formatDescription,
-              let asbd = description.audioStreamBasicDescription else { return nil }
-
-        var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList()
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        var listSize = 0
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            bufferListSizeNeededOut: &listSize,
+            bufferListOut: nil,
+            bufferListSize: 0,
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
             flags: 0,
-            blockBufferOut: &blockBuffer
+            blockBufferOut: nil
+        ) == noErr, listSize > 0 else { return nil }
+
+        let raw = UnsafeMutableRawPointer.allocate(
+            byteCount: listSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
         )
-        guard status == noErr else { return nil }
+        defer { raw.deallocate() }
+        let listPointer = raw.assumingMemoryBound(to: AudioBufferList.self)
 
-        let buffers = UnsafeMutableAudioBufferListPointer(&audioBufferList)
-        guard let first = buffers.first, let data = first.mData else { return nil }
-        let count = Int(first.mDataByteSize) / MemoryLayout<Float>.size
-        guard count > 0, asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 else { return nil }
+        var blockBuffer: CMBlockBuffer?
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: listPointer,
+            bufferListSize: listSize,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: &blockBuffer
+        ) == noErr else { return nil }
 
-        let pointer = data.bindMemory(to: Float.self, capacity: count)
-        // Sub-sample: we only need the envelope, not every frame
+        let list = UnsafeMutableAudioBufferListPointer(listPointer)
+        guard let first = list.first, let firstData = first.mData else { return nil }
+
+        let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size
+        guard frames > 0 else { return nil }
+
+        // Average the channels, sub-sampling since we only need the envelope
+        let step = 4
         var out: [Float] = []
-        out.reserveCapacity(count / 4 + 1)
+        out.reserveCapacity(frames / step + 1)
+        let channels = list.count
+        let pointers = list.compactMap { $0.mData?.bindMemory(to: Float.self, capacity: frames) }
+        guard !pointers.isEmpty else {
+            let single = firstData.bindMemory(to: Float.self, capacity: frames)
+            var i = 0
+            while i < frames { out.append(single[i]); i += step }
+            return out
+        }
+
         var i = 0
-        while i < count {
-            out.append(pointer[i])
-            i += 4
+        while i < frames {
+            var sum: Float = 0
+            for p in pointers { sum += p[i] }
+            out.append(sum / Float(channels))
+            i += step
         }
         return out
     }

@@ -299,9 +299,9 @@ class ControllerServer {
 
     /// Push a rumble level (0...1) to every connected phone. Same framing as
     /// inbound messages: 4-byte big-endian length + JSON.
-    func sendRumble(_ level: Double) {
+    func sendRumble(_ level: Double, sharpness: Double = 0) {
         guard !connections.isEmpty else { return }
-        let json = "{\"rumble\":\(String(format: "%.3f", level))}"
+        let json = "{\"rumble\":\(String(format: "%.3f", level)),\"sharp\":\(String(format: "%.3f", sharpness))}"
         guard let payload = json.data(using: .utf8) else { return }
         var length = UInt32(payload.count).bigEndian
         var frame = Data(bytes: &length, count: 4)

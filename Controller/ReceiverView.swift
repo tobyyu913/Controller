@@ -428,8 +428,8 @@ struct UniversalView: View {
                 }
                 // Audio rumble
                 HStack {
-                    Toggle("Audio rumble (buzz the phone with the bass)", isOn: Binding(
-                        get: { audioRumble.isRunning },
+                    Toggle("Audio rumble (buzz the phone with the game's sound)", isOn: Binding(
+                        get: { audioRumble.enabled },
                         set: { on in on ? audioRumble.start() : audioRumble.stop() }
                     ))
                     .toggleStyle(.switch)
@@ -438,6 +438,10 @@ struct UniversalView: View {
                         Text(err)
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.red)
+                    } else if audioRumble.enabled && !audioRumble.isRunning {
+                        Text("starting…")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     } else if audioRumble.isRunning {
                         // Live level meter
                         ZStack(alignment: .leading) {
@@ -448,7 +452,7 @@ struct UniversalView: View {
                         }
                     }
                 }
-                if audioRumble.isRunning {
+                if audioRumble.enabled {
                     HStack {
                         Text("Rumble strength")
                             .font(.system(size: 12, design: .monospaced))
@@ -678,6 +682,8 @@ struct UniversalView: View {
             let m = mapper
             server.onMessage = { msg in m.process(msg) }
             autoEnableIfWanted()
+            // Resume audio rumble if it was on last session
+            if audioRumble.enabled && !audioRumble.isRunning { audioRumble.start() }
             // Prime the HID badge immediately instead of waiting for the 2s timer
             if mapper.virtualMouseMode {
                 _ = VirtualMouse.shared.connect()
@@ -686,7 +692,9 @@ struct UniversalView: View {
             }
         }
         .onReceive(rumbleTimer) { _ in
-            if audioRumble.isRunning { server.sendRumble(audioRumble.level) }
+            if audioRumble.isRunning {
+                server.sendRumble(audioRumble.level, sharpness: audioRumble.sharpness)
+            }
         }
         .onReceive(axTimer) { _ in
             axTrusted = AXIsProcessTrusted()

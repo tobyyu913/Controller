@@ -17,7 +17,7 @@ class ControllerSender(private val context: Context) {
     private val writeLock = Any()
     private val latest = AtomicReference<ControllerMessage?>(null)
     /// Called with 0..1 when the receiver pushes a rumble level
-    var onRumble: ((Double) -> Unit)? = null
+    var onRumble: ((Double, Double) -> Unit)? = null
     private var senderJob: Job? = null
 
     private var nsdManager: NsdManager? = null
@@ -170,7 +170,9 @@ class ControllerSender(private val context: Context) {
                 }
                 try {
                     val obj = org.json.JSONObject(String(payload, Charsets.UTF_8))
-                    if (obj.has("rumble")) onRumble?.invoke(obj.getDouble("rumble"))
+                    if (obj.has("rumble")) {
+                        onRumble?.invoke(obj.getDouble("rumble"), obj.optDouble("sharp", 0.0))
+                    }
                 } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
