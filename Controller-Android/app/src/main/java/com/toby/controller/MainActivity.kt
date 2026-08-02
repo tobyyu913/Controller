@@ -356,7 +356,7 @@ fun ControllerScreen(sender: ControllerSender, btController: BluetoothHidControl
                     val k = gyroSens * 0.35f
                     // Flip when the phone is held the other way round
                     val flip = if (activity.display?.rotation == android.view.Surface.ROTATION_270) -1f else 1f
-                    var yaw = -e.values[0] * k * flip
+                    var yaw = e.values[0] * k * flip
                     var pitch = -e.values[1] * k * flip
                     if (gyroInvertY) pitch = -pitch
                     state.gyroX = yaw.toDouble().coerceIn(-1.0, 1.0)
